@@ -359,6 +359,40 @@ func TestStateKeyFamilies(t *testing.T) {
 	}
 }
 
+func TestAssetKeys(t *testing.T) {
+	key, err := EncodeAssetKey(4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key[0] != PrefixAsset {
+		t.Fatalf("prefix %x", key[0])
+	}
+	id, err := DecodeAssetKey(key)
+	if err != nil || id != 4 {
+		t.Fatalf("asset %d %v", id, err)
+	}
+	if _, err := EncodeAssetKey(0); !errors.Is(err, domain.ErrInvalidAsset) {
+		t.Fatal(err)
+	}
+	denomKey, err := EncodeAssetDenomKey("base")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if denomKey[0] != PrefixAssetDenom {
+		t.Fatalf("denom prefix %x", denomKey[0])
+	}
+	denom, err := DecodeAssetDenomKey(denomKey)
+	if err != nil || denom != "base" {
+		t.Fatalf("denom %q %v", denom, err)
+	}
+	if _, err := EncodeAssetDenomKey(""); !errors.Is(err, ErrInvalidKey) {
+		t.Fatal(err)
+	}
+	if bytes.Compare(key, denomKey) >= 0 {
+		t.Fatal("asset id key is not before the denom index")
+	}
+}
+
 func assertStrictByteOrder(t *testing.T, keys [][]byte) {
 	t.Helper()
 	for i := 1; i < len(keys); i++ {

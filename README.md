@@ -19,15 +19,18 @@ The project goal is a serious Cosmos SDK central limit order book: integer ticks
 - Trades, order and trade sequences, command nonces, and exchange revision
 - Atomic place/cancel via a Cosmos SDK cache context
 
+**Implemented — milestone 3, runnable chain**
+
+- `cosmos-orderbookd` wires auth, bank, staking, genutil, consensus, and `x/exchange`
+- Deposit and withdrawal move bank coins through one exchange module account
+- `Msg` and query services, genesis, and CLI commands for orders, balances, the book, and trades
+
 **Planned**
 
-- Full Cosmos app and CometBFT wiring
 - `x/batch` execution
 - Sequencer admission, signatures, ordering, and batch building
-- Protobuf queries and CLI
-- Bank deposit and withdrawal messages
 
-`pkg/matching` still does not import the SDK. There is no gRPC, REST, or CLI in this repository yet.
+`pkg/matching` still does not import the SDK.
 
 ## Architecture
 
@@ -46,18 +49,34 @@ pkg/arithmetic      checked integer math
 pkg/canonical       order IDs and state keys
 pkg/matching        pure matcher
 pkg/matching/memsource
-x/exchange          keeper, book, ledger, settlement
+x/exchange          keeper, module, messages, queries
+app                 chain wiring
+cmd/cosmos-orderbookd
 benchmarks          matcher benchmarks
 docs                architecture, matching, state layout
 ```
 
-`x/batch`, the sequencer, and the Cosmos app are not in the tree yet.
+`x/batch` and the sequencer are not in the tree yet.
 
 ## Matching example
 
 Ticks, not decimals. A buy of 100 lots at tick 1000 against asks of 30 @ 980, 40 @ 990, and 50 @ 1000 fills 30 @ 980, 40 @ 990, and 30 @ 1000. The incoming remainder is 0. The last maker keeps 20 lots and its original sequence.
 
 A UI can render tick 1000 as `10.00`. That rendering is not part of consensus. See [docs/architecture.md](docs/architecture.md).
+
+## Local node
+
+```bash
+make build
+./scripts/localnet.sh
+```
+
+The script initializes one validator, funds `alice` with `base` and `bob` with `quote`, and starts the node. Home defaults to `.localnet`. After the node is up:
+
+```bash
+build/cosmos-orderbookd tx exchange deposit 1000base --from alice --chain-id orderbook-1 --keyring-backend test --home .localnet --fees 1stake -y
+build/cosmos-orderbookd q exchange markets --home .localnet
+```
 
 ## Tests
 

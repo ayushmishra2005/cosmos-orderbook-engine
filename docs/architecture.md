@@ -1,6 +1,6 @@
 # Architecture
 
-`cosmos-orderbook-engine` is a Cosmos SDK exchange. Matching is a pure function. `x/exchange` owns the store, reservations, settlement, and fees. The app, `x/batch`, and the sequencer are not implemented.
+`cosmos-orderbook-engine` is a Cosmos SDK exchange. Matching is a pure function. `x/exchange` owns the store, reservations, settlement, and fees. The chain binary wires auth, bank, staking, genutil, consensus, and exchange. `x/batch` and the sequencer are not implemented.
 
 Toolchain: Go 1.26.x and Cosmos SDK v0.54.4 (CometBFT v0.39.4 via that SDK). The matcher does not import the SDK.
 
@@ -71,3 +71,9 @@ A buy locks `quantity * limitTick * quoteAtomsPerTickPerLot` quote atoms. A sell
 The fill price is the maker tick. The buyer receives base minus the buyer fee. The seller receives quote minus the seller fee. Fees accrue to the fee-collector balance of that asset. When an incoming buy fills below its limit, the unused locked quote is returned to available quote. A resting buy fills at its own tick, so that fill has no price-improvement refund.
 
 Place and cancel either commit every exchange write or leave the store unchanged. Matching reads a cursor and does not write. The cache is written only after the execution plan checks out.
+
+## Application
+
+`cosmos-orderbookd` is a single-validator CometBFT chain. Deposits move bank coins from the user to the exchange module account and credit available balance. Withdrawals do the reverse and cannot spend locked balance. Both run in one cache, so a bank failure does not leave the internal ledger changed. Trades move atoms only inside the exchange ledger. The module account's bank balance for each registered denom must cover the sum of available and locked balances.
+
+Genesis may register assets, markets, sequences, and the exchange revision. An internal balance is accepted only when that module custody already holds the coins. The usual local chain funds bank accounts in genesis and deposits after start. The order ID instance is `orderbook-v1`. Clients do not choose a new order's ID.

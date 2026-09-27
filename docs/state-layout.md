@@ -21,6 +21,10 @@ Prefix `0x00` is unused so a zeroed buffer is not a valid key. Prefixes are cons
 | `0x0B` | (no suffix) | exchange revision | singleton |
 | `0x0C` | marketID | market record, including the maker and taker fee ppm | point lookup |
 | `0x0D` | marketID \| trade sequence | trade record | increasing sequence |
+| `0x0E` | assetID | asset record: denom | point lookup |
+| `0x0F` | denom | assetID | denom to asset |
+
+An asset record is the codec version, the asset ID, and a one-byte length followed by the bank denom. The denom index value is the asset ID. Deposits resolve that denom before crediting available balance.
 
 The fee schedule is the market's `MakerFeePPM` and `TakerFeePPM`. It is not a second record. Protocol fees accrue in the balance of the reserved owner `exchange/fee-collector` under prefix `0x07`. That owner cannot place orders. Missing balance, nonce, sequence, and revision keys mean zero.
 

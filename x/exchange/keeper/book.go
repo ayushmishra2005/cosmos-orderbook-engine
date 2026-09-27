@@ -1,6 +1,7 @@
 package keeper
 
 import (
+	"bytes"
 	"context"
 	"errors"
 
@@ -225,12 +226,44 @@ func (k Keeper) removeResting(ctx context.Context, order types.StoredOrder) erro
 	if err := kv.Delete(ownerKey); err != nil {
 		return err
 	}
-	if order.Order.TimeInForce != domain.TimeInForceGTD {
-		return nil
+	if order.Order.TimeInForce == domain.TimeInForceGTD {
+		expKey, err := canonical.EncodeExpirationKey(order.Order.ExpiryHeight, order.Order.ID)
+		if err != nil {
+			return err
+		}
+		if err := kv.Delete(expKey); err != nil {
+			return err
+		}
 	}
-	expKey, err := canonical.EncodeExpirationKey(order.Order.ExpiryHeight, order.Order.ID)
+	return k.deleteClientOrder(ctx, order.Order.Owner, order.Order.ID)
+}
+
+func (k Keeper) deleteClientOrder(ctx context.Context, owner []byte, id domain.OrderID) error {
+	prefix, err := canonical.ActiveClientOrderPrefix(owner)
 	if err != nil {
 		return err
 	}
-	return kv.Delete(expKey)
+	kv, err := k.kv(ctx)
+	if err != nil {
+		return err
+	}
+	iter, err := kv.Iterator(prefix, prefixEnd(prefix))
+	if err != nil {
+		return err
+	}
+	var drop [][]byte
+	for ; iter.Valid(); iter.Next() {
+		if bytes.Equal(iter.Value(), id[:]) {
+			drop = append(drop, append([]byte(nil), iter.Key()...))
+		}
+	}
+	if err := iter.Close(); err != nil {
+		return err
+	}
+	for _, key := range drop {
+		if err := kv.Delete(key); err != nil {
+			return err
+		}
+	}
+	return nil
 }

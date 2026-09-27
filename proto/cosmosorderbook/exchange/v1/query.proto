@@ -1,0 +1,106 @@
+syntax = "proto3";
+package cosmosorderbook.exchange.v1;
+
+import "cosmosorderbook/exchange/v1/types.proto";
+
+option go_package = "github.com/ayushmishra2005/cosmos-orderbook-engine/x/exchange/types/v1";
+
+// Query is the exchange query service.
+service Query {
+  rpc Market(QueryMarketRequest) returns (QueryMarketResponse);
+  rpc Markets(QueryMarketsRequest) returns (QueryMarketsResponse);
+  rpc Balance(QueryBalanceRequest) returns (QueryBalanceResponse);
+  rpc Balances(QueryBalancesRequest) returns (QueryBalancesResponse);
+  rpc Order(QueryOrderRequest) returns (QueryOrderResponse);
+  rpc OpenOrders(QueryOpenOrdersRequest) returns (QueryOpenOrdersResponse);
+  rpc Orderbook(QueryOrderbookRequest) returns (QueryOrderbookResponse);
+  rpc Trades(QueryTradesRequest) returns (QueryTradesResponse);
+  rpc ExchangeRevision(QueryExchangeRevisionRequest) returns (QueryExchangeRevisionResponse);
+}
+
+message QueryMarketRequest {
+  uint64 market_id = 1;
+}
+
+message QueryMarketResponse {
+  Market market = 1;
+}
+
+message QueryMarketsRequest {
+  uint32 limit  = 1;
+  uint64 offset = 2;
+}
+
+message QueryMarketsResponse {
+  repeated Market markets     = 1;
+  uint64          next_offset = 2;
+}
+
+message QueryBalanceRequest {
+  string owner    = 1;
+  uint64 asset_id = 2;
+}
+
+message QueryBalanceResponse {
+  Balance balance = 1;
+}
+
+message QueryBalancesRequest {
+  string owner  = 1;
+  uint32 limit  = 2;
+  uint64 offset = 3;
+}
+
+message QueryBalancesResponse {
+  repeated Balance balances    = 1;
+  uint64           next_offset = 2;
+}
+
+message QueryOrderRequest {
+  bytes order_id = 1;
+}
+
+message QueryOrderResponse {
+  Order order = 1;
+}
+
+message QueryOpenOrdersRequest {
+  string owner     = 1;
+  uint64 market_id = 2;
+  uint32 limit     = 3;
+  uint64 offset    = 4;
+}
+
+message QueryOpenOrdersResponse {
+  repeated Order orders      = 1;
+  uint64         next_offset = 2;
+}
+
+message QueryOrderbookRequest {
+  uint64 market_id  = 1;
+  uint32 depth      = 2;
+  uint32 ask_offset = 3;
+  uint32 bid_offset = 4;
+}
+
+message QueryOrderbookResponse {
+  repeated BookOrder asks = 1;
+  repeated BookOrder bids = 2;
+}
+
+message QueryTradesRequest {
+  uint64 market_id     = 1;
+  uint64 after_sequence = 2;
+  uint32 limit         = 3;
+}
+
+message QueryTradesResponse {
+  repeated Trade trades        = 1;
+  uint64         next_sequence = 2;
+}
+
+message QueryExchangeRevisionRequest {}
+
+message QueryExchangeRevisionResponse {
+  uint64 revision = 1;
+}

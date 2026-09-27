@@ -88,6 +88,12 @@ func (k Keeper) expire(ctx sdk.Context, height uint64, max int) (int, error) {
 		if err := k.removeResting(ctx, rel.order); err != nil {
 			return 0, err
 		}
+		emit(ctx, types.EventTypeOrderExpired,
+			sdk.NewAttribute("order_id", rel.order.Order.ID.String()),
+			sdk.NewAttribute("owner", sdk.AccAddress(rel.order.Order.Owner).String()),
+			sdk.NewAttribute("asset_id", u64(uint64(rel.asset))),
+			sdk.NewAttribute("released", u64(rel.amount)),
+		)
 	}
 	for _, bal := range bals.items {
 		if err := k.setBalance(ctx, bal.owner, bal.asset, bal.bal); err != nil {

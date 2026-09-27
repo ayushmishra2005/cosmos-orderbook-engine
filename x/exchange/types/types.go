@@ -4,7 +4,14 @@ import (
 	"bytes"
 	"errors"
 
+	sdk "github.com/cosmos/cosmos-sdk/types"
+
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/domain"
+)
+
+const (
+	ModuleName = "exchange"
+	StoreKey   = ModuleName
 )
 
 const (
@@ -36,7 +43,29 @@ var (
 	ErrCrossed             = errors.New("exchange: resting book would cross")
 	ErrBound               = errors.New("exchange: expiration bound must be positive")
 	ErrSettlement          = errors.New("exchange: settlement invariant failed")
+	ErrUnknownDenom        = errors.New("exchange: unknown denom")
+	ErrInvalidAmount       = errors.New("exchange: invalid amount")
+	ErrUnbacked            = errors.New("exchange: custody does not cover liabilities")
+	ErrInstance            = errors.New("exchange: instance id mismatch")
+	ErrLimit               = errors.New("exchange: page limit exceeds maximum")
 )
+
+// Asset maps a bank denom to an exchange asset ID.
+type Asset struct {
+	ID    domain.AssetID
+	Denom string
+}
+
+// Validate checks the asset ID and bank denom.
+func (a Asset) Validate() error {
+	if a.ID == 0 {
+		return domain.ErrInvalidAsset
+	}
+	if err := sdk.ValidateDenom(a.Denom); err != nil {
+		return err
+	}
+	return nil
+}
 
 // Market is one trading pair. Fees are parts per million of the filled gross.
 type Market struct {
@@ -113,15 +142,16 @@ type Trade struct {
 // PlaceOrderCommand is one place request. The order ID and sequence are
 // assigned by the keeper. Quantity is both the original and the initial remaining.
 type PlaceOrderCommand struct {
-	Owner        []byte
-	MarketID     domain.MarketID
-	Side         domain.Side
-	Type         domain.OrderType
-	TimeInForce  domain.TimeInForce
-	Price        domain.Price
-	Quantity     domain.Quantity
-	ExpiryHeight uint64
-	CommandNonce uint64
+	Owner         []byte
+	MarketID      domain.MarketID
+	Side          domain.Side
+	Type          domain.OrderType
+	TimeInForce   domain.TimeInForce
+	Price         domain.Price
+	Quantity      domain.Quantity
+	ExpiryHeight  uint64
+	CommandNonce  uint64
+	ClientOrderID []byte
 }
 
 // CancelOrderCommand cancels by order ID. The book is not scanned.

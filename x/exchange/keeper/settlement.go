@@ -26,6 +26,7 @@ type executionPlan struct {
 	setTradeSequence bool
 	owner            []byte
 	nonce            uint64
+	clientOrderID    []byte
 	revision         uint64
 	remaining        domain.Quantity
 	stop             uint8

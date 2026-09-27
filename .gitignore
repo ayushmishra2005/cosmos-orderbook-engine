@@ -1,4 +1,7 @@
 bin/
+build/
+.tools/
+.localnet/
 dist/
 *.exe
 *.test

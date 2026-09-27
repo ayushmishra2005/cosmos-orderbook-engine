@@ -339,6 +339,48 @@ func EncodeTradeKey(marketID domain.MarketID, sequence uint64) ([]byte, error) {
 	return append(key, seq[:]...), nil
 }
 
+// EncodeAssetKey addresses one registered asset by ID.
+func EncodeAssetKey(assetID domain.AssetID) ([]byte, error) {
+	if assetID == 0 {
+		return nil, domain.ErrInvalidAsset
+	}
+	var key [9]byte
+	key[0] = PrefixAsset
+	binary.BigEndian.PutUint64(key[1:], uint64(assetID))
+	return key[:], nil
+}
+
+// DecodeAssetKey reverses EncodeAssetKey.
+func DecodeAssetKey(key []byte) (domain.AssetID, error) {
+	if len(key) != 9 || key[0] != PrefixAsset {
+		return 0, ErrInvalidKey
+	}
+	id := domain.AssetID(binary.BigEndian.Uint64(key[1:]))
+	if id == 0 {
+		return 0, domain.ErrInvalidAsset
+	}
+	return id, nil
+}
+
+// EncodeAssetDenomKey addresses an asset ID by its bank denom.
+func EncodeAssetDenomKey(denom string) ([]byte, error) {
+	if denom == "" || len(denom) > MaxDenomLength {
+		return nil, ErrInvalidKey
+	}
+	key := make([]byte, 1+len(denom))
+	key[0] = PrefixAssetDenom
+	copy(key[1:], denom)
+	return key, nil
+}
+
+// DecodeAssetDenomKey reverses EncodeAssetDenomKey.
+func DecodeAssetDenomKey(key []byte) (string, error) {
+	if len(key) < 2 || key[0] != PrefixAssetDenom || len(key)-1 > MaxDenomLength {
+		return "", ErrInvalidKey
+	}
+	return string(key[1:]), nil
+}
+
 // DecodeTradeKey reverses EncodeTradeKey.
 func DecodeTradeKey(key []byte) (domain.MarketID, uint64, error) {
 	if len(key) != 17 || key[0] != PrefixTrade {

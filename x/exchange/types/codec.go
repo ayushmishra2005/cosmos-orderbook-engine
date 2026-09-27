@@ -438,3 +438,46 @@ func DecodeUint64(bz []byte) (uint64, error) {
 	}
 	return binary.BigEndian.Uint64(bz), nil
 }
+
+// EncodeAsset encodes an asset record. The asset ID is also the key.
+func EncodeAsset(a Asset) ([]byte, error) {
+	if err := a.Validate(); err != nil {
+		return nil, err
+	}
+	if len(a.Denom) > 255 {
+		return nil, ErrCorrupt
+	}
+	dst := []byte{codecVersion}
+	dst = putU64(dst, uint64(a.ID))
+	dst = append(dst, byte(len(a.Denom)))
+	dst = append(dst, a.Denom...)
+	return dst, nil
+}
+
+// DecodeAsset reverses EncodeAsset.
+func DecodeAsset(bz []byte) (Asset, error) {
+	r := reader{b: bz}
+	if err := r.version(); err != nil {
+		return Asset{}, err
+	}
+	id, err := r.u64()
+	if err != nil {
+		return Asset{}, err
+	}
+	n, err := r.u8()
+	if err != nil {
+		return Asset{}, err
+	}
+	raw, err := r.raw(int(n))
+	if err != nil {
+		return Asset{}, err
+	}
+	if err := r.done(); err != nil {
+		return Asset{}, err
+	}
+	a := Asset{ID: domain.AssetID(id), Denom: string(raw)}
+	if err := a.Validate(); err != nil {
+		return Asset{}, ErrCorrupt
+	}
+	return a, nil
+}

@@ -25,6 +25,8 @@ const (
 	PrefixExchangeRevision  byte = 0x0B
 	PrefixMarket            byte = 0x0C
 	PrefixTrade             byte = 0x0D
+	PrefixAsset             byte = 0x0E
+	PrefixAssetDenom        byte = 0x0F
 )
 
 // MaxClientOrderIDLength bounds the client order id stored in the active-id index.
@@ -33,4 +35,6 @@ const MaxClientOrderIDLength = 64
 const (
 	maxChainIDLen    = 128
 	maxInstanceIDLen = 32
+	// MaxDenomLength bounds a bank denom stored in the asset index.
+	MaxDenomLength = 128
 )

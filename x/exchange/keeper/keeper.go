@@ -20,6 +20,7 @@ type Keeper struct {
 	store           store.KVStoreService
 	chainID         string
 	instanceID      []byte
+	bank            BankKeeper
 	failBeforeWrite error
 }
 
@@ -40,6 +41,18 @@ func NewKeeper(svc store.KVStoreService, chainID string, instanceID []byte) (Kee
 		return Keeper{}, err
 	}
 	return Keeper{store: svc, chainID: chainID, instanceID: copied}, nil
+}
+
+// WithBank attaches the bank keeper used by deposit and withdrawal.
+// Trading does not call it. A nil bank rejects custody messages.
+func (k Keeper) WithBank(bank BankKeeper) Keeper {
+	k.bank = bank
+	return k
+}
+
+// InstanceID is the exchange instance mixed into order IDs.
+func (k Keeper) InstanceID() []byte {
+	return append([]byte(nil), k.instanceID...)
 }
 
 // commit runs fn against a child cache. Write runs only after fn returns nil.

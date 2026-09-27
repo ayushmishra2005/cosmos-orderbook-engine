@@ -1,4 +1,7 @@
-.PHONY: test test-race vet bench check
+.PHONY: test test-race vet bench check build
+
+build:
+	go build -o build/cosmos-orderbookd ./cmd/cosmos-orderbookd
 
 test:
 	go test ./...

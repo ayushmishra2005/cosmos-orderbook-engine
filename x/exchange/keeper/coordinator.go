@@ -100,6 +100,19 @@ func (k Keeper) place(ctx sdk.Context, cmd types.PlaceOrderCommand) (executionPl
 	} else if !errors.Is(err, types.ErrNotFound) {
 		return executionPlan{}, err
 	}
+	if len(cmd.ClientOrderID) > 0 {
+		key, err := canonical.EncodeActiveClientOrderKey(owner, cmd.ClientOrderID)
+		if err != nil {
+			return executionPlan{}, err
+		}
+		existing, err := k.get(ctx, key)
+		if err != nil {
+			return executionPlan{}, err
+		}
+		if existing != nil {
+			return executionPlan{}, types.ErrExists
+		}
+	}
 	if err := k.requireReserve(ctx, market, order); err != nil {
 		return executionPlan{}, err
 	}
@@ -135,7 +148,12 @@ func (k Keeper) place(ctx sdk.Context, cmd types.PlaceOrderCommand) (executionPl
 	default:
 		return executionPlan{}, types.ErrSettlement
 	}
-	return k.settle(ctx, market, order, matched)
+	plan, err := k.settle(ctx, market, order, matched)
+	if err != nil {
+		return executionPlan{}, err
+	}
+	plan.clientOrderID = append([]byte(nil), cmd.ClientOrderID...)
+	return plan, nil
 }
 
 // A resting remainder is allowed only when the next opposite order does not
@@ -183,6 +201,10 @@ func opposite(side domain.Side) domain.Side {
 }
 
 func (k Keeper) apply(ctx sdk.Context, plan executionPlan) error {
+	kv, err := k.kv(ctx)
+	if err != nil {
+		return err
+	}
 	for _, maker := range plan.makers {
 		if maker.remove {
 			if err := k.removeResting(ctx, maker.order); err != nil {
@@ -198,15 +220,20 @@ func (k Keeper) apply(ctx sdk.Context, plan executionPlan) error {
 		if err := k.putResting(ctx, plan.taker); err != nil {
 			return err
 		}
+		if len(plan.clientOrderID) > 0 {
+			key, err := canonical.EncodeActiveClientOrderKey(plan.owner, plan.clientOrderID)
+			if err != nil {
+				return err
+			}
+			if err := kv.Set(key, append([]byte(nil), plan.taker.Order.ID[:]...)); err != nil {
+				return err
+			}
+		}
 	}
 	for _, bal := range plan.balances {
 		if err := k.setBalance(ctx, bal.owner, bal.asset, bal.bal); err != nil {
 			return err
 		}
-	}
-	kv, err := k.kv(ctx)
-	if err != nil {
-		return err
 	}
 	for _, trade := range plan.trades {
 		key, err := canonical.EncodeTradeKey(trade.MarketID, trade.Sequence)
@@ -242,7 +269,11 @@ func (k Keeper) apply(ctx sdk.Context, plan executionPlan) error {
 	if err := k.acceptNonce(ctx, plan.owner, plan.nonce); err != nil {
 		return err
 	}
-	return k.setUint64(ctx, canonical.EncodeExchangeRevisionKey(), plan.revision)
+	if err := k.setUint64(ctx, canonical.EncodeExchangeRevisionKey(), plan.revision); err != nil {
+		return err
+	}
+	emitOrderEvents(ctx, plan)
+	return nil
 }
 
 // CancelOrder releases the remaining reservation and deletes the order by ID.
@@ -310,5 +341,11 @@ func (k Keeper) cancel(ctx sdk.Context, cmd types.CancelOrderCommand) (types.Can
 	if err := k.bumpRevision(ctx); err != nil {
 		return types.CancelResult{}, err
 	}
+	emit(ctx, types.EventTypeOrderCancelled,
+		sdk.NewAttribute("order_id", order.Order.ID.String()),
+		sdk.NewAttribute("owner", sdk.AccAddress(owner).String()),
+		sdk.NewAttribute("asset_id", u64(uint64(asset))),
+		sdk.NewAttribute("released", u64(amount)),
+	)
 	return types.CancelResult{OrderID: order.Order.ID, AssetID: asset, Released: amount}, nil
 }
