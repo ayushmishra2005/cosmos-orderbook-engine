@@ -23,6 +23,8 @@ const (
 	PrefixMarketSequence    byte = 0x09
 	PrefixTradeSequence     byte = 0x0A
 	PrefixExchangeRevision  byte = 0x0B
+	PrefixMarket            byte = 0x0C
+	PrefixTrade             byte = 0x0D
 )
 
 // MaxClientOrderIDLength bounds the client order id stored in the active-id index.

@@ -314,3 +314,43 @@ func DecodeExchangeRevisionKey(key []byte) error {
 	}
 	return nil
 }
+
+// EncodeMarketKey addresses one market record.
+func EncodeMarketKey(marketID domain.MarketID) ([]byte, error) {
+	return encodeMarketPrefixed(PrefixMarket, marketID)
+}
+
+// DecodeMarketKey reverses EncodeMarketKey.
+func DecodeMarketKey(key []byte) (domain.MarketID, error) {
+	return decodeMarketPrefixed(PrefixMarket, key)
+}
+
+// EncodeTradeKey addresses one trade. Sequence 0 is not a trade.
+func EncodeTradeKey(marketID domain.MarketID, sequence uint64) ([]byte, error) {
+	if sequence == 0 {
+		return nil, domain.ErrInvalidSequence
+	}
+	key, err := encodeMarketPrefixed(PrefixTrade, marketID)
+	if err != nil {
+		return nil, err
+	}
+	var seq [8]byte
+	binary.BigEndian.PutUint64(seq[:], sequence)
+	return append(key, seq[:]...), nil
+}
+
+// DecodeTradeKey reverses EncodeTradeKey.
+func DecodeTradeKey(key []byte) (domain.MarketID, uint64, error) {
+	if len(key) != 17 || key[0] != PrefixTrade {
+		return 0, 0, ErrInvalidKey
+	}
+	marketID, err := decodeMarketPrefixed(PrefixTrade, key[:9])
+	if err != nil {
+		return 0, 0, err
+	}
+	sequence := binary.BigEndian.Uint64(key[9:])
+	if sequence == 0 {
+		return 0, 0, domain.ErrInvalidSequence
+	}
+	return marketID, sequence, nil
+}

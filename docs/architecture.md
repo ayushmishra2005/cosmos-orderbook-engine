@@ -1,8 +1,8 @@
 # Architecture
 
-`cosmos-orderbook-engine` is a Cosmos SDK exchange. This repository currently contains the deterministic core only. The Cosmos application, keepers, sequencer, and batch execution are not implemented.
+`cosmos-orderbook-engine` is a Cosmos SDK exchange. Matching is a pure function. `x/exchange` owns the store, reservations, settlement, and fees. The app, `x/batch`, and the sequencer are not implemented.
 
-The target stack for later milestones is Go 1.26, Cosmos SDK v0.54.4, and a CometBFT release compatible with that SDK. Those modules are intentionally not dependencies yet. The matcher must not import the SDK.
+Toolchain: Go 1.26.x and Cosmos SDK v0.54.4 (CometBFT v0.39.4 via that SDK). The matcher does not import the SDK.
 
 ## Packages
 
@@ -13,33 +13,61 @@ pkg/arithmetic
     ↓
 pkg/matching
     ↓
-x/exchange          (not implemented)
-    ↓
-x/batch             (not implemented)
-    ↓
-app                 (not implemented)
+x/exchange
 ```
 
-`pkg/canonical` depends only on `pkg/domain`. It encodes order IDs and the state keys the future `x/exchange` keeper will use.
+`pkg/canonical` depends only on `pkg/domain`. It encodes order IDs and state keys. `x/exchange` may import the packages above. `pkg/*` must not import `x/exchange`, the app, or a Cosmos keeper.
 
-`pkg/matching` depends on `pkg/domain` and `pkg/arithmetic`. It does not import `pkg/canonical`. Book order is the cursor's responsibility. The in-memory cursor used by tests sorts with the canonical book keys, which is the same byte order a Cosmos iterator will produce.
+`Match` returns a plan. It does not write balances, delete orders, or assign sequences. The keeper opens one side of one market as an `OrderSource`, calls `Match`, closes the cursor, and only then builds an execution plan. One place or cancel runs inside a single `CacheContext`. The cache is written only after the plan validates. Any error discards it.
 
-Forbidden edges:
+There is no `x/orderbook` or `x/settlement` module.
+
+## Numeric model
+
+Prices are tick counts. Quantities are lot counts. Both are `uint64`. Display decimals are not protocol values.
 
 ```text
-pkg/* -> x/*
-pkg/* -> app/*
-x/exchange -> x/batch
+baseAmount  = quantityLots * baseLotSize
+quoteAmount = quantityLots * priceTicks * quoteAtomsPerTickPerLot
 ```
 
-There is no `x/orderbook` or `x/settlement` module. Both will live inside `x/exchange`.
+No `float32` or `float64` on the match or settlement path. Addition, subtraction, and multiplication are checked. Overflow and underflow return errors and do not wrap. A zero lot size or a zero quote-atoms-per-tick is an error.
 
-## Why matching is separate from state
+Fees use parts per million:
 
-`Match` is a pure function of an incoming order, a forward cursor of makers, a block height, and a visit cap. It returns a plan. It does not write balances, delete orders, or assign sequences.
+```text
+C(gross, ppm) = ceil(gross * ppm / 1_000_000)
+```
 
-That split keeps consensus rules testable without a chain and keeps SDK types out of the hot path. A later keeper opens a prefix iterator, passes it to `Match` as an `OrderSource`, and applies the plan. Replaying the same cursor and the same input produces the same plan.
+A fee that does not fit in `uint64` is an error. Rates above `1_000_000` are rejected so a fee cannot exceed the gross it is charged on. Buyer fees are base atoms. Seller fees are quote atoms. The maker or taker rate follows the order's role on that fill.
 
-## What this milestone does not do
+Split fills must not change the total fee. The order stores separate taker and maker gross accumulators. The fee on a new gross is `C(previous + new) - C(previous)` for that role. An order that first takes and later rests does not mix those accumulators.
 
-Bank custody, deposits, withdrawals, fee collection, settlement, sequencer networking, signed batches, queries, and the CometBFT app are planned. They are not stubbed in as empty modules.
+## Order IDs, nonces, sequences
+
+`OrderID` is 32 bytes:
+
+```text
+SHA-256(
+    u64be len(domain) | "cosmos-orderbook-engine/order-id/v1"
+    u64be len(chainID) | chainID
+    u64be len(instance) | instance
+    u64be len(owner) | owner
+    u64be marketID
+    u64be commandNonce
+)
+```
+
+Variable-length fields are length-prefixed. The encoding is not JSON and not protobuf. `owner` is raw address bytes, not bech32. The hash does not check the nonce sequence. The keeper does: the command nonce must equal `ExpectedCommandNonce(lastAccepted)`. The first accepted nonce is 1. Nonce 0 means none have been accepted.
+
+Each market has one order sequence. `NextSequence(0)` is 1. It is allocated only when an order rests. A lower sequence is older and wins at the same price. A partial fill does not take a new sequence. Trade sequence is a separate per-market counter and also starts at 1. Neither counter wraps.
+
+Key bytes are specified in [state-layout.md](state-layout.md).
+
+## Execution
+
+A buy locks `quantity * limitTick * quoteAtomsPerTickPerLot` quote atoms. A sell locks `quantity * baseLotSize` base atoms. A market buy locks quote at its maximum tick. A market sell locks base. Market orders never rest.
+
+The fill price is the maker tick. The buyer receives base minus the buyer fee. The seller receives quote minus the seller fee. Fees accrue to the fee-collector balance of that asset. When an incoming buy fills below its limit, the unused locked quote is returned to available quote. A resting buy fills at its own tick, so that fill has no price-improvement refund.
+
+Place and cancel either commit every exchange write or leave the store unchanged. Matching reads a cursor and does not write. The cache is written only after the execution plan checks out.

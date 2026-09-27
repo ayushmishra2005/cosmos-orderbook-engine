@@ -1,24 +1,28 @@
 # State layout
 
-Keys below are the byte layout the future `x/exchange` keeper will store. This milestone implements the codecs and tests. It does not open a KV store.
+`x/exchange` stores these keys in its KV store. The active-order record is authoritative. Ask and bid values are the 32-byte order ID only.
 
 Integer fields are fixed-width big-endian. Owner bytes use a one-byte length prefix (`1..255`) because keys are scanned lexicographically. That prefix is not the `u64be` length used in the order-ID hash preimage. The two encodings must stay separate.
 
 Prefix `0x00` is unused so a zeroed buffer is not a valid key. Prefixes are consensus-critical.
 
-| Prefix | Key | Value (later) | Iteration |
+| Prefix | Key | Value | Iteration |
 | --- | --- | --- | --- |
-| `0x01` | order ID | `domain.Order` | point lookup |
+| `0x01` | order ID | order record, including separate taker and maker fee grosses | point lookup |
 | `0x02` | marketID \| price \| sequence | order ID | lowest ask, then oldest sequence |
 | `0x03` | marketID \| (MaxUint64-price) \| sequence | order ID | highest bid, then oldest sequence |
-| `0x04` | ownerLen \| owner \| marketID \| order ID | empty or duplicate ID | one owner's open orders |
-| `0x05` | ownerLen \| owner \| clientLen \| client order ID | order ID | one owner's client IDs |
-| `0x06` | expiry height \| order ID | order ID | earliest expiry first |
-| `0x07` | ownerLen \| owner \| assetID | balance in atoms | one owner's balances |
+| `0x04` | ownerLen \| owner \| marketID \| order ID | order ID | one owner's open orders |
+| `0x05` | ownerLen \| owner \| clientLen \| client order ID | order ID | one owner's client IDs; not written until a command carries a client ID |
+| `0x06` | expiry height \| order ID | order ID | earliest expiry first; GTD rests only |
+| `0x07` | ownerLen \| owner \| assetID | available `u64` \| locked `u64` | one owner's balances |
 | `0x08` | ownerLen \| owner | last accepted command nonce | point lookup |
 | `0x09` | marketID | last order sequence | point lookup |
 | `0x0A` | marketID | last trade sequence | point lookup |
 | `0x0B` | (no suffix) | exchange revision | singleton |
+| `0x0C` | marketID | market record, including the maker and taker fee ppm | point lookup |
+| `0x0D` | marketID \| trade sequence | trade record | increasing sequence |
+
+The fee schedule is the market's `MakerFeePPM` and `TakerFeePPM`. It is not a second record. Protocol fees accrue in the balance of the reserved owner `exchange/fee-collector` under prefix `0x07`. That owner cannot place orders. Missing balance, nonce, sequence, and revision keys mean zero.
 
 Ask and bid keys are 25 bytes. The active-order key is 33 bytes. The expiration key is 41 bytes. Market and trade sequence keys are 9 bytes and differ only in the prefix. The revision key is the single byte `0x0B`; the integer lives in the value.
 

@@ -15,7 +15,7 @@ The cursor for a buy is the ask book, lowest price first. The cursor for a sell 
 - Matching uses `RemainingQuantity`. `OriginalQuantity` is only an upper bound.
 - A maker is fully consumed before the next maker at that price. The only partial maker fill is the last fill, when the taker runs out. That maker keeps its sequence.
 
-`MaxMakerVisits == 0` means the pure function has no cap. The future keeper must pass a non-zero cap. Every peeked maker counts, including an expired maker that is then skipped. When the cap stops the scan, the taker remainder is cancelled. It is not rested: unvisited makers might still cross, and a resting order must not cross the book.
+`MaxMakerVisits == 0` means the pure function has no cap. A market record requires a non-zero cap, and the keeper passes that value. Every peeked maker counts, including an expired maker that is then skipped. When the cap stops the scan, the taker remainder is cancelled. It is not rested: unvisited makers might still cross, and a resting order must not cross the book.
 
 ## Self-trade
 
@@ -27,15 +27,18 @@ A maker outside the limit is a normal price-boundary stop, even when the owner m
 
 FOK is stricter. If self-trade, the visit cap, or a lack of quantity prevents a full fill, the plan has no fills. The simulated partial result is discarded.
 
-## What may rest
+## Time in force
 
-`RestIncoming` is true only when all of the following hold:
+| Value | Remainder |
+| --- | --- |
+| GTC | May rest. Expiry height is zero. |
+| GTD | May rest while `height < ExpiryHeight`. That height is the first height at which the order is expired. |
+| IOC | Never rests. Unfilled quantity is cancelled. |
+| FOK | The whole quantity executes or the plan has no fills. Never rests. |
 
-- the order is a limit GTC or GTD
-- remaining quantity is non-zero
-- the stop reason is book exhaustion or the price boundary
+Market orders are IOC or FOK and still carry a worst tick. A market GTC or GTD is rejected. Market orders never rest.
 
-IOC, FOK, and market orders never rest. Self-trade, the visit cap, and an already-expired incoming GTD cancel the remainder.
+`RestIncoming` is true only for a limit GTC or GTD with quantity left when the stop reason is book exhaustion or the price boundary. Self-trade, the visit cap, and an already-expired incoming GTD cancel the remainder. The pure plan does not delete expired makers; `x/exchange` does that from the expiration index.
 
 ## Example
 
@@ -61,4 +64,4 @@ Incoming remainder: 0. The last maker still has 20 lots and keeps sequence 3.
 
 The same incoming order, the same ordered maker stream, the same height, and the same visit cap produce the same `MatchPlan`. Fill order is the cursor order. The implementation does not use map iteration, goroutines, wall-clock time, randomness, or floating point.
 
-The plan is not applied here. Settlement, fee charging, and book mutation belong to the future exchange keeper. Fee and notional formulas live in `pkg/arithmetic` so that keeper can call them without a second rounding rule.
+`x/exchange` applies the plan after the cursor is closed. Reservation, price improvement, and cumulative fees are keeper rules; see [architecture.md](architecture.md).

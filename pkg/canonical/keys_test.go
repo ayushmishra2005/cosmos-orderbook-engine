@@ -321,8 +321,33 @@ func TestStateKeyFamilies(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	marketKey, err := EncodeMarketKey(11)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := DecodeMarketKey(marketKey); err != nil || got != 11 {
+		t.Fatalf("market %d %v", got, err)
+	}
+	if _, err := EncodeMarketKey(0); !errors.Is(err, domain.ErrInvalidMarket) {
+		t.Fatal(err)
+	}
+	tradeKey, err := EncodeTradeKey(11, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMarket, gotSeq, err := DecodeTradeKey(tradeKey); err != nil || gotMarket != 11 || gotSeq != 2 {
+		t.Fatalf("trade %d %d %v", gotMarket, gotSeq, err)
+	}
+	if _, err := EncodeTradeKey(11, 0); !errors.Is(err, domain.ErrInvalidSequence) {
+		t.Fatal(err)
+	}
+	if bytes.Compare(marketKey, tradeKey) >= 0 {
+		t.Fatal("market key is not before a later trade key of the same market")
+	}
+
 	first := []byte{
 		active[0], open[0], client[0], exp1[0], balance[0], nonceKey[0], marketSeq[0], tradeSeq[0], rev[0],
+		marketKey[0], tradeKey[0],
 		PrefixAskBook, PrefixBidBook,
 	}
 	for i := range first {
