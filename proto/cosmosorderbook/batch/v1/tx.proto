@@ -1,0 +1,32 @@
+syntax = "proto3";
+package cosmosorderbook.batch.v1;
+
+import "cosmos/msg/v1/msg.proto";
+import "cosmos_proto/cosmos.proto";
+import "cosmosorderbook/batch/v1/types.proto";
+
+option go_package = "github.com/ayushmishra2005/cosmos-orderbook-engine/x/batch/types/v1";
+
+// Msg is the batch transaction service.
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  rpc FinalizeBatch(MsgFinalizeBatch) returns (MsgFinalizeBatchResponse);
+}
+
+// MsgFinalizeBatch executes ordered signed commands as one batch.
+// The submitter authorizes inclusion. Each command is signed by its owner.
+message MsgFinalizeBatch {
+  option (cosmos.msg.v1.signer) = "submitter";
+
+  string submitter = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  uint64 batch_number = 2;
+  uint64 expected_exchange_revision = 3;
+  repeated SignedCommand commands = 4;
+}
+
+message MsgFinalizeBatchResponse {
+  bytes batch_id = 1;
+  uint64 post_exchange_revision = 2;
+  repeated CommandResult results = 3;
+}

@@ -45,3 +45,13 @@ A price level is the contiguous key range `marketID | price`. The orders at that
 Bid keys store `MaxUint64 - price`, implemented as the bitwise complement. Complement is an involution, so decode recovers the original tick. The highest tick complements to `0` and therefore sorts first under ordinary ascending iteration. Sequence is not complemented, so the smaller sequence still sorts first at that price.
 
 Asks store the raw tick. The lowest ask sorts first for the same reason, without a complement.
+
+## x/batch
+
+`x/batch` uses its own module store. These prefixes are independent of `x/exchange`. A batch record stores the batch number, batch ID, execution height, pre and post exchange revisions, and a per-command summary. It does not copy the book.
+
+| Prefix | Key | Value |
+| --- | --- | --- |
+| `0x01` | (none) | authorized submitter and latest batch number |
+| `0x02` | batch number | batch record |
+| `0x03` | batch ID | batch number |

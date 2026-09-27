@@ -28,6 +28,7 @@ import (
 	genutilcli "github.com/cosmos/cosmos-sdk/x/genutil/client/cli"
 
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/app"
+	batchcli "github.com/ayushmishra2005/cosmos-orderbook-engine/x/batch/client/cli"
 	exchangecli "github.com/ayushmishra2005/cosmos-orderbook-engine/x/exchange/client/cli"
 )
 
@@ -103,6 +104,7 @@ func queryCommand() *cobra.Command {
 		authcli.QueryTxCmd(),
 		authcli.QueryTxsByEventsCmd(),
 		exchangecli.GetQueryCmd(),
+		batchcli.GetQueryCmd(),
 	)
 	cmd.PersistentFlags().String(flags.FlagChainID, "", "network chain ID")
 	return cmd
@@ -125,6 +127,7 @@ func txCommand(ac address.Codec) *cobra.Command {
 		authcli.GetSimulateCmd(),
 		bankcli.NewTxCmd(ac),
 		exchangecli.GetTxCmd(),
+		batchcli.GetTxCmd(),
 	)
 	return cmd
 }

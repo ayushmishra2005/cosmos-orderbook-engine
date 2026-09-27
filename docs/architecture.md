@@ -1,6 +1,6 @@
 # Architecture
 
-`cosmos-orderbook-engine` is a Cosmos SDK exchange. Matching is a pure function. `x/exchange` owns the store, reservations, settlement, and fees. The chain binary wires auth, bank, staking, genutil, consensus, and exchange. `x/batch` and the sequencer are not implemented.
+`cosmos-orderbook-engine` is a Cosmos SDK exchange. Matching is a pure function. `x/exchange` owns the store, reservations, settlement, and fees. `x/batch` submits an ordered list of signed commands and runs them through that keeper. The chain binary wires auth, bank, staking, genutil, consensus, exchange, and batch. The sequencer is not implemented.
 
 Toolchain: Go 1.26.x and Cosmos SDK v0.54.4 (CometBFT v0.39.4 via that SDK). The matcher does not import the SDK.
 
@@ -14,9 +14,11 @@ pkg/arithmetic
 pkg/matching
     ↓
 x/exchange
+    ↑
+x/batch
 ```
 
-`pkg/canonical` depends only on `pkg/domain`. It encodes order IDs and state keys. `x/exchange` may import the packages above. `pkg/*` must not import `x/exchange`, the app, or a Cosmos keeper.
+`pkg/canonical` depends only on `pkg/domain`. It encodes order IDs, state keys, and signed batch commands. `x/exchange` may import the packages above. `x/batch` may call `x/exchange`. `x/exchange` must not import `x/batch`. `pkg/*` must not import `x/exchange`, `x/batch`, the app, or a Cosmos keeper.
 
 `Match` returns a plan. It does not write balances, delete orders, or assign sequences. The keeper opens one side of one market as an `OrderSource`, calls `Match`, closes the cursor, and only then builds an execution plan. One place or cancel runs inside a single `CacheContext`. The cache is written only after the plan validates. Any error discards it.
 
@@ -71,6 +73,20 @@ A buy locks `quantity * limitTick * quoteAtomsPerTickPerLot` quote atoms. A sell
 The fill price is the maker tick. The buyer receives base minus the buyer fee. The seller receives quote minus the seller fee. Fees accrue to the fee-collector balance of that asset. When an incoming buy fills below its limit, the unused locked quote is returned to available quote. A resting buy fills at its own tick, so that fill has no price-improvement refund.
 
 Place and cancel either commit every exchange write or leave the store unchanged. Matching reads a cursor and does not write. The cache is written only after the execution plan checks out.
+
+## Batch execution
+
+`MsgFinalizeBatch` carries a batch number, the exchange revision the commands were built against, and ordered `PlaceOrder` and `CancelOrder` commands. Deposits and withdrawals stay ordinary transactions. Validators execute the commands themselves, in the submitted order, through `x/exchange`. Later commands see the balances, orders, nonces, and revision written by earlier commands in the same batch.
+
+The batch is one cache around those calls. The exchange keeper still opens its own cache for each command. If any check or command fails, neither cache is kept: orders, trades, nonces, the revision, and the batch record all stay as they were. There is no partial batch.
+
+Each command is signed by its owner with secp256k1 over canonical bytes (`cosmos-orderbook/batch-command/v1`), not JSON or protobuf. The public key must derive the owner. The chain ID, exchange instance, and protocol version must match. The command uses the exchange account nonce, the same nonce as a direct place or cancel.
+
+For this milestone one genesis address may submit batches. That authorization is temporary and centralized. There is no sequencer, submitter rotation, or proof system.
+
+The first finalized batch number is 1. The next number is the previous number plus one. A duplicate, skipped, or older number is rejected. The current exchange revision must equal `expectedExchangeRevision` before the first command runs. `BeginBlock` expiration can advance the revision before transactions in that block.
+
+`BatchID` is SHA-256 over `cosmos-orderbook/batch-id/v1`, the batch number, the expected revision, and the ordered signed commands. It identifies that batch. It is not an exchange state root.
 
 ## Application
 

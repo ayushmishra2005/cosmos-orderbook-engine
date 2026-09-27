@@ -22,6 +22,8 @@ import (
 
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/canonical"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/domain"
+	batchtypes "github.com/ayushmishra2005/cosmos-orderbook-engine/x/batch/types"
+	batchv1 "github.com/ayushmishra2005/cosmos-orderbook-engine/x/batch/types/v1"
 	exchangekeeper "github.com/ayushmishra2005/cosmos-orderbook-engine/x/exchange/keeper"
 	exchangetypes "github.com/ayushmishra2005/cosmos-orderbook-engine/x/exchange/types"
 	v1 "github.com/ayushmishra2005/cosmos-orderbook-engine/x/exchange/types/v1"
@@ -276,6 +278,11 @@ func startApp(t *testing.T, accounts []funded, edit func(*v1.GenesisState), extr
 
 func buildApp(t *testing.T, accounts []funded, edit func(*v1.GenesisState), extra ...banktypes.Balance) (*App, error) {
 	t.Helper()
+	return buildAppFull(t, accounts, edit, nil, extra...)
+}
+
+func buildAppFull(t *testing.T, accounts []funded, edit func(*v1.GenesisState), batchEdit func(*batchv1.GenesisState), extra ...banktypes.Balance) (*App, error) {
+	t.Helper()
 	valSet, err := simtestutil.CreateRandomValidatorSet()
 	if err != nil {
 		return nil, err
@@ -302,6 +309,14 @@ func buildApp(t *testing.T, accounts []funded, edit func(*v1.GenesisState), extr
 		}
 		edit(&gs)
 		genesis[exchangetypes.ModuleName] = application.Codec().MustMarshalJSON(&gs)
+	}
+	if batchEdit != nil {
+		var gs batchv1.GenesisState
+		if err := application.Codec().UnmarshalJSON(genesis[batchtypes.ModuleName], &gs); err != nil {
+			return nil, err
+		}
+		batchEdit(&gs)
+		genesis[batchtypes.ModuleName] = application.Codec().MustMarshalJSON(&gs)
 	}
 	genesis, err = simtestutil.GenesisStateWithValSet(application.Codec(), genesis, valSet, genAccs, balances...)
 	if err != nil {

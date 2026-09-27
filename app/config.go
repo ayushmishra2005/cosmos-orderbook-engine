@@ -18,6 +18,7 @@ import (
 	genutiltypes "github.com/cosmos/cosmos-sdk/x/genutil/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 
+	batchtypes "github.com/ayushmishra2005/cosmos-orderbook-engine/x/batch/types"
 	exchangetypes "github.com/ayushmishra2005/cosmos-orderbook-engine/x/exchange/types"
 
 	_ "github.com/cosmos/cosmos-sdk/x/auth"
@@ -68,6 +69,7 @@ func AppConfig() depinject.Config {
 							genutiltypes.ModuleName,
 							consensus.ModuleName,
 							exchangetypes.ModuleName,
+							batchtypes.ModuleName,
 						},
 						ExportGenesis: []string{
 							authtypes.ModuleName,
@@ -76,6 +78,7 @@ func AppConfig() depinject.Config {
 							genutiltypes.ModuleName,
 							consensus.ModuleName,
 							exchangetypes.ModuleName,
+							batchtypes.ModuleName,
 						},
 					}),
 				},

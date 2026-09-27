@@ -7,6 +7,9 @@ var (
 	ErrInvalidChainID       = errors.New("canonical: invalid chain id")
 	ErrInvalidInstanceID    = errors.New("canonical: invalid exchange instance id")
 	ErrInvalidClientOrderID = errors.New("canonical: invalid client order id")
+	ErrUnsupportedVersion   = errors.New("canonical: unsupported protocol version")
+	ErrInvalidCommand       = errors.New("canonical: invalid batch command")
+	ErrInvalidBatchIdentity = errors.New("canonical: invalid batch identity")
 )
 
 const (

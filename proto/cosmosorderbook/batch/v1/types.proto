@@ -1,0 +1,102 @@
+syntax = "proto3";
+package cosmosorderbook.batch.v1;
+
+option go_package = "github.com/ayushmishra2005/cosmos-orderbook-engine/x/batch/types/v1";
+
+// CommandType matches the canonical command discriminator.
+enum CommandType {
+  COMMAND_TYPE_UNSPECIFIED = 0;
+  COMMAND_TYPE_PLACE_ORDER = 1;
+  COMMAND_TYPE_CANCEL_ORDER = 2;
+}
+
+// Side matches pkg/domain.
+enum Side {
+  SIDE_UNSPECIFIED = 0;
+  SIDE_BUY = 1;
+  SIDE_SELL = 2;
+}
+
+// OrderType matches pkg/domain.
+enum OrderType {
+  ORDER_TYPE_UNSPECIFIED = 0;
+  ORDER_TYPE_LIMIT = 1;
+  ORDER_TYPE_MARKET = 2;
+}
+
+// TimeInForce matches pkg/domain.
+enum TimeInForce {
+  TIME_IN_FORCE_UNSPECIFIED = 0;
+  TIME_IN_FORCE_GTC = 1;
+  TIME_IN_FORCE_IOC = 2;
+  TIME_IN_FORCE_FOK = 3;
+  TIME_IN_FORCE_GTD = 4;
+}
+
+// OrderStatus is the outcome of one successful command.
+enum OrderStatus {
+  ORDER_STATUS_UNSPECIFIED = 0;
+  ORDER_STATUS_RESTING = 1;
+  ORDER_STATUS_FILLED = 2;
+  ORDER_STATUS_CANCELLED = 3;
+  ORDER_STATUS_UNFILLED = 4;
+}
+
+// Place is one place-order body. The order ID is derived by the exchange.
+message Place {
+  uint64 market_id = 1;
+  Side side = 2;
+  OrderType order_type = 3;
+  TimeInForce time_in_force = 4;
+  uint64 quantity_lots = 5;
+  uint64 price_ticks = 6;
+  uint64 expiry_height = 7;
+  bytes client_order_id = 8;
+}
+
+// Cancel names one live order.
+message Cancel {
+  bytes order_id = 1;
+}
+
+// SignedCommand is one trader command inside a batch.
+// The signature covers canonical bytes, not this protobuf encoding.
+message SignedCommand {
+  uint32 protocol_version = 1;
+  string chain_id = 2;
+  bytes exchange_instance_id = 3;
+  string owner = 4;
+  uint64 command_nonce = 5;
+  CommandType command_type = 6;
+  Place place = 7;
+  Cancel cancel = 8;
+  bytes pub_key = 9;
+  bytes signature = 10;
+}
+
+// TradeRef identifies one fill without copying the trade record.
+message TradeRef {
+  uint64 market_id = 1;
+  uint64 sequence = 2;
+}
+
+// CommandResult is the summary stored for one successful command.
+message CommandResult {
+  uint32 index = 1;
+  CommandType command_type = 2;
+  string owner = 3;
+  bytes order_id = 4;
+  OrderStatus status = 5;
+  uint64 remaining_lots = 6;
+  repeated TradeRef trades = 7;
+}
+
+// Batch is one finalized batch record.
+message Batch {
+  uint64 batch_number = 1;
+  bytes batch_id = 2;
+  uint64 execution_height = 3;
+  uint64 pre_exchange_revision = 4;
+  uint64 post_exchange_revision = 5;
+  repeated CommandResult results = 6;
+}

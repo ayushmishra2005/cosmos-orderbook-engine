@@ -23,6 +23,9 @@ import (
 
 	"cosmossdk.io/depinject"
 
+	"github.com/ayushmishra2005/cosmos-orderbook-engine/x/batch"
+	batchkeeper "github.com/ayushmishra2005/cosmos-orderbook-engine/x/batch/keeper"
+	batchtypes "github.com/ayushmishra2005/cosmos-orderbook-engine/x/batch/types"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/x/exchange"
 	exchangekeeper "github.com/ayushmishra2005/cosmos-orderbook-engine/x/exchange/keeper"
 	exchangetypes "github.com/ayushmishra2005/cosmos-orderbook-engine/x/exchange/types"
@@ -36,6 +39,7 @@ type App struct {
 	cdc           codec.Codec
 	txConfig      client.TxConfig
 	Keeper        exchangekeeper.Keeper
+	BatchKeeper   batchkeeper.Keeper
 	BankKeeper    bankkeeper.BaseKeeper
 	AccountKeeper authkeeper.AccountKeeper
 	stakingKeeper *stakingkeeper.Keeper
@@ -75,20 +79,26 @@ func New(logger log.Logger, db dbm.DB, chainID string) (*App, error) {
 		return nil, err
 	}
 	k = k.WithBank(bank)
+	batchStoreKey := storetypes.NewKVStoreKey(batchtypes.StoreKey)
+	bk, err := batchkeeper.NewKeeper(runtime.NewKVStoreService(batchStoreKey), chainID, k)
+	if err != nil {
+		return nil, err
+	}
 
 	app := &App{
 		cdc:           cdc,
 		txConfig:      txConfig,
 		Keeper:        k,
+		BatchKeeper:   bk,
 		BankKeeper:    bank,
 		AccountKeeper: account,
 		stakingKeeper: stakingKeeper,
 	}
 	app.App = builder.Build(db, baseapp.SetChainID(chainID))
-	if err := app.RegisterStores(storeKey); err != nil {
+	if err := app.RegisterStores(storeKey, batchStoreKey); err != nil {
 		return nil, err
 	}
-	if err := app.RegisterModules(exchange.NewAppModule(cdc, k)); err != nil {
+	if err := app.RegisterModules(exchange.NewAppModule(cdc, k), batch.NewAppModule(cdc, bk)); err != nil {
 		return nil, err
 	}
 	if err := app.Load(true); err != nil {

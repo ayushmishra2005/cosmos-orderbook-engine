@@ -17,12 +17,27 @@ rm -rf "$home"
 "$bin" keys add validator --keyring-backend test --home "$home" >/dev/null
 "$bin" keys add alice --keyring-backend test --home "$home" >/dev/null
 "$bin" keys add bob --keyring-backend test --home "$home" >/dev/null
+"$bin" keys add submitter --keyring-backend test --home "$home" >/dev/null
 
 "$bin" genesis add-genesis-account validator 100000000000stake --keyring-backend test --home "$home"
 "$bin" genesis add-genesis-account alice 100000000000stake,100000000base --keyring-backend test --home "$home"
 "$bin" genesis add-genesis-account bob 100000000000stake,100000000quote --keyring-backend test --home "$home"
+"$bin" genesis add-genesis-account submitter 100000000000stake --keyring-backend test --home "$home"
 "$bin" genesis gentx validator 100000000000stake --chain-id "$chain_id" --keyring-backend test --home "$home"
 "$bin" genesis collect-gentxs --home "$home" >/dev/null
+
+submitter="$("$bin" keys show submitter -a --keyring-backend test --home "$home")"
+python3 - "$home/config/genesis.json" "$submitter" <<'PY'
+import json, sys
+path, addr = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    doc = json.load(f)
+doc["app_state"]["batch"]["submitter"] = addr
+with open(path, "w") as f:
+    json.dump(doc, f, indent=2)
+    f.write("\n")
+PY
+echo "batch submitter $submitter"
 
 echo "starting $chain_id from $home"
 exec "$bin" start --home "$home" --minimum-gas-prices 0stake

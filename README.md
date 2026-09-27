@@ -25,10 +25,16 @@ The project goal is a serious Cosmos SDK central limit order book: integer ticks
 - Deposit and withdrawal move bank coins through one exchange module account
 - `Msg` and query services, genesis, and CLI commands for orders, balances, the book, and trades
 
+**Implemented — milestone 4, `x/batch`**
+
+- One authorized submitter finalizes an ordered batch of signed place and cancel commands
+- Validators execute those commands through `x/exchange` in submitted order
+- The batch is atomic: a failed command rolls back earlier commands, nonces, and the batch record
+- `BatchID` identifies the ordered batch. It is not an exchange state root
+
 **Planned**
 
-- `x/batch` execution
-- Sequencer admission, signatures, ordering, and batch building
+- Sequencer admission and batch building
 
 `pkg/matching` still does not import the SDK.
 
@@ -46,17 +52,18 @@ The matcher returns a `MatchPlan`. It does not write state. Book order comes fro
 ```text
 pkg/domain          orders, sides, sequence, nonce
 pkg/arithmetic      checked integer math
-pkg/canonical       order IDs and state keys
+pkg/canonical       order IDs, state keys, batch command bytes
 pkg/matching        pure matcher
 pkg/matching/memsource
 x/exchange          keeper, module, messages, queries
+x/batch             ordered batch execution
 app                 chain wiring
 cmd/cosmos-orderbookd
 benchmarks          matcher benchmarks
 docs                architecture, matching, state layout
 ```
 
-`x/batch` and the sequencer are not in the tree yet.
+The sequencer is not in the tree yet.
 
 ## Matching example
 

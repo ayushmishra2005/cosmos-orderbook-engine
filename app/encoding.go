@@ -11,6 +11,9 @@ import (
 	genutil "github.com/cosmos/cosmos-sdk/x/genutil"
 	genutiltypes "github.com/cosmos/cosmos-sdk/x/genutil/types"
 
+	"github.com/ayushmishra2005/cosmos-orderbook-engine/x/batch"
+	batchtypes "github.com/ayushmishra2005/cosmos-orderbook-engine/x/batch/types"
+	batchv1 "github.com/ayushmishra2005/cosmos-orderbook-engine/x/batch/types/v1"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/x/exchange"
 	exchangetypes "github.com/ayushmishra2005/cosmos-orderbook-engine/x/exchange/types"
 	v1 "github.com/ayushmishra2005/cosmos-orderbook-engine/x/exchange/types/v1"
@@ -39,7 +42,9 @@ func MakeEncodingConfig(logger log.Logger) (EncodingConfig, error) {
 		return EncodingConfig{}, err
 	}
 	v1.RegisterInterfaces(enc.InterfaceRegistry)
+	batchv1.RegisterInterfaces(enc.InterfaceRegistry)
 	enc.BasicManager[exchangetypes.ModuleName] = exchange.AppModuleBasic{}
+	enc.BasicManager[batchtypes.ModuleName] = batch.AppModuleBasic{}
 	enc.BasicManager[genutiltypes.ModuleName] = genutil.NewAppModuleBasic(genutiltypes.DefaultMessageValidator)
 	return enc, nil
 }

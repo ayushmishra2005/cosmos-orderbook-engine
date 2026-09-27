@@ -1,0 +1,35 @@
+syntax = "proto3";
+package cosmosorderbook.batch.v1;
+
+import "cosmosorderbook/batch/v1/types.proto";
+
+option go_package = "github.com/ayushmishra2005/cosmos-orderbook-engine/x/batch/types/v1";
+
+// Query is the batch query service.
+service Query {
+  rpc Batch(QueryBatchRequest) returns (QueryBatchResponse);
+  rpc LatestBatch(QueryLatestBatchRequest) returns (QueryLatestBatchResponse);
+  rpc BatchByID(QueryBatchByIDRequest) returns (QueryBatchByIDResponse);
+}
+
+message QueryBatchRequest {
+  uint64 batch_number = 1;
+}
+
+message QueryBatchResponse {
+  Batch batch = 1;
+}
+
+message QueryLatestBatchRequest {}
+
+message QueryLatestBatchResponse {
+  Batch batch = 1;
+}
+
+message QueryBatchByIDRequest {
+  bytes batch_id = 1;
+}
+
+message QueryBatchByIDResponse {
+  Batch batch = 1;
+}
