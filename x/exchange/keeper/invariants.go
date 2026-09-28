@@ -61,8 +61,12 @@ func (k Keeper) CheckInvariants(ctx context.Context) error {
 		if ownerCount[id] != 1 {
 			return corrupt("owner open-order index count")
 		}
-		if clientCount[id] > 1 {
-			return corrupt("duplicate client index for one order")
+		if len(order.ClientOrderID) == 0 {
+			if clientCount[id] != 0 {
+				return corrupt("client index on an order without a client id")
+			}
+		} else if clientCount[id] != 1 {
+			return corrupt("client index count")
 		}
 		if order.Order.TimeInForce == domain.TimeInForceGTD {
 			if expCount[id] != 1 {
@@ -367,7 +371,7 @@ func (k Keeper) checkClientIndexes(ctx context.Context, byID map[domain.OrderID]
 		if !ok {
 			return false, corrupt("client index points to missing order")
 		}
-		if !bytes.Equal(order.Order.Owner, owner) {
+		if !bytes.Equal(order.Order.Owner, owner) || !bytes.Equal(order.ClientOrderID, clientID) {
 			return false, corrupt("client index owner")
 		}
 		count[id]++

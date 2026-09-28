@@ -201,17 +201,9 @@ func (k Keeper) writeGenesisOrder(ctx context.Context, order v1.GenesisActiveOrd
 			return err
 		}
 	}
-	if err := k.putResting(ctx, order.Order); err != nil {
-		return err
-	}
-	if len(clientKey) == 0 {
-		return nil
-	}
-	kv, err := k.kv(ctx)
-	if err != nil {
-		return err
-	}
-	return kv.Set(clientKey, append([]byte(nil), order.Order.Order.ID[:]...))
+	stored := order.Order
+	stored.ClientOrderID = append([]byte(nil), order.ClientOrderID...)
+	return k.putResting(ctx, stored)
 }
 
 func (k Keeper) ensureAbsent(ctx context.Context, key []byte) error {
@@ -383,15 +375,15 @@ func (k Keeper) ExportGenesis(ctx context.Context) (v1.GenesisState, error) {
 		if err != nil {
 			return false, err
 		}
-		var client []byte
 		if ref, ok := clients[id]; ok {
-			if !bytes.Equal(ref.owner, order.Order.Owner) {
+			if !bytes.Equal(ref.owner, order.Order.Owner) || !bytes.Equal(ref.client, order.ClientOrderID) {
 				return false, types.ErrCorrupt
 			}
-			client = ref.client
 			delete(clients, id)
+		} else if len(order.ClientOrderID) > 0 {
+			return false, types.ErrCorrupt
 		}
-		gs.Orders = append(gs.Orders, genesisOrderToProto(order, client))
+		gs.Orders = append(gs.Orders, genesisOrderToProto(order, order.ClientOrderID))
 		return false, nil
 	})
 	if err != nil {

@@ -255,17 +255,9 @@ func (k Keeper) apply(ctx sdk.Context, plan executionPlan) error {
 		}
 	}
 	if plan.rest {
+		plan.taker.ClientOrderID = append([]byte(nil), plan.clientOrderID...)
 		if err := k.putResting(ctx, plan.taker); err != nil {
 			return err
-		}
-		if len(plan.clientOrderID) > 0 {
-			key, err := canonical.EncodeActiveClientOrderKey(plan.owner, plan.clientOrderID)
-			if err != nil {
-				return err
-			}
-			if err := kv.Set(key, append([]byte(nil), plan.taker.Order.ID[:]...)); err != nil {
-				return err
-			}
 		}
 		if err := noteUpdate(); err != nil {
 			return err

@@ -48,20 +48,24 @@ func (k Keeper) deposit(ctx sdk.Context, owner sdk.AccAddress, coin sdk.Coin) er
 	if err != nil {
 		return err
 	}
+	bal, err := k.GetBalance(ctx, owner, asset.ID)
+	if err != nil {
+		return err
+	}
+	next, err := arithmetic.Add(bal.Available, amount)
+	if err != nil {
+		return err
+	}
+	if err := types.ValidateBalanceCapacity(next, bal.Locked); err != nil {
+		return err
+	}
 	if err := k.bank.SendCoinsFromAccountToModule(ctx, owner, types.ModuleName, sdk.NewCoins(sdk.NewCoin(coin.Denom, sdkmath.NewIntFromUint64(amount)))); err != nil {
 		return err
 	}
 	if err := k.fail(FailAfterBankDeposit); err != nil {
 		return err
 	}
-	bal, err := k.GetBalance(ctx, owner, asset.ID)
-	if err != nil {
-		return err
-	}
-	bal.Available, err = arithmetic.Add(bal.Available, amount)
-	if err != nil {
-		return err
-	}
+	bal.Available = next
 	if err := k.setBalance(ctx, owner, asset.ID, bal); err != nil {
 		return err
 	}

@@ -8,7 +8,7 @@ Prefix `0x00` is unused so a zeroed buffer is not a valid key. Prefixes are cons
 
 | Prefix | Key | Value | Iteration |
 | --- | --- | --- | --- |
-| `0x01` | order ID | order record, including separate taker and maker fee grosses | point lookup |
+| `0x01` | order ID | order record: fee grosses and a length-prefixed client order id | point lookup |
 | `0x02` | marketID \| price \| sequence | order ID | lowest ask, then oldest sequence |
 | `0x03` | marketID \| (MaxUint64-price) \| sequence | order ID | highest bid, then oldest sequence |
 | `0x04` | ownerLen \| owner \| marketID \| order ID | order ID | one owner's open orders |
@@ -28,7 +28,7 @@ An asset record is the codec version, the asset ID, and a one-byte length follow
 
 The fee schedule is the market's `MakerFeePPM` and `TakerFeePPM`. It is not a second record. Protocol fees accrue in the balance of the reserved owner `exchange/fee-collector` under prefix `0x07`. That owner cannot place orders. Missing balance, nonce, sequence, and revision keys mean zero.
 
-Genesis stores the active-order record, not a second copy of prefixes `0x02` through `0x06`. `InitGenesis` rebuilds those indexes from the orders. The client order id is carried on the genesis order because prefix `0x01` does not contain it. Prefix `0x0F` is rebuilt from the asset record. Trades (`0x0D`) are exported so the trade sequence stays tied to a gap-free history. `x/batch` genesis stores the submitter, latest number, head commitment, and finalized batch records.
+Genesis stores the active-order record, not a second copy of prefixes `0x02` through `0x06`. `InitGenesis` rebuilds those indexes from the orders. The client order id lives on that record and is repeated on the genesis order so the `0x05` index can be rebuilt. Prefix `0x0F` is rebuilt from the asset record. Trades (`0x0D`) are exported so the trade sequence stays tied to a gap-free history. `x/batch` genesis stores the submitter, latest number, head commitment, and finalized batch records.
 
 Ask and bid keys are 25 bytes. The active-order key is 33 bytes. The expiration key is 41 bytes. Market and trade sequence keys are 9 bytes and differ only in the prefix. The revision key is the single byte `0x0B`; the integer lives in the value.
 

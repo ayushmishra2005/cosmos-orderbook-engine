@@ -3,6 +3,7 @@ package types
 import (
 	"encoding/binary"
 
+	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/canonical"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/domain"
 )
 
@@ -223,6 +224,11 @@ func EncodeOrder(o StoredOrder) ([]byte, error) {
 	dst = putU64(dst, o.Order.CommandNonce)
 	dst = putU64(dst, o.TakerGross)
 	dst = putU64(dst, o.MakerGross)
+	if len(o.ClientOrderID) > canonical.MaxClientOrderIDLength {
+		return nil, canonical.ErrInvalidClientOrderID
+	}
+	dst = append(dst, byte(len(o.ClientOrderID)))
+	dst = append(dst, o.ClientOrderID...)
 	return dst, nil
 }
 
@@ -284,10 +290,25 @@ func DecodeOrder(id domain.OrderID, bz []byte) (StoredOrder, error) {
 	if err != nil {
 		return StoredOrder{}, err
 	}
+	clientLen, err := r.u8()
+	if err != nil {
+		return StoredOrder{}, err
+	}
+	var clientID []byte
+	if clientLen > 0 {
+		clientID, err = r.raw(int(clientLen))
+		if err != nil {
+			return StoredOrder{}, err
+		}
+		if len(clientID) > canonical.MaxClientOrderIDLength {
+			return StoredOrder{}, ErrCorrupt
+		}
+	}
 	if err := r.done(); err != nil {
 		return StoredOrder{}, err
 	}
 	o := StoredOrder{
+		ClientOrderID: clientID,
 		Order: domain.Order{
 			ID:                id,
 			Owner:             owner,

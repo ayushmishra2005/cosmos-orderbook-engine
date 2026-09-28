@@ -158,7 +158,7 @@ func (k Keeper) finalize(ctx sdk.Context, msg *v1.MsgFinalizeBatch) (types.Batch
 	for i := range commands {
 		result, err := k.execute(ctx, commands[i])
 		if err != nil {
-			return types.Batch{}, err
+			return types.Batch{}, &types.CommandRejection{Index: i, Err: err}
 		}
 		result.Index = uint32(i)
 		results[i] = result

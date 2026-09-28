@@ -176,7 +176,7 @@ func TestGenesisKeeperRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if imported.MakerGross != rest.MakerGross || imported.TakerGross != rest.TakerGross || imported.Order.RemainingQuantity != 2 {
+	if imported.MakerGross != rest.MakerGross || imported.TakerGross != rest.TakerGross || imported.Order.RemainingQuantity != 2 || string(imported.ClientOrderID) != "desk" {
 		t.Fatalf("gross %+v", imported)
 	}
 	_, err = k2.PlaceOrder(ctx2, types.PlaceOrderCommand{

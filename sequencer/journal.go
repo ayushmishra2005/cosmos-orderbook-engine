@@ -16,20 +16,22 @@ import (
 const journalMagic = "OBJ1"
 
 const (
-	statusPending   byte = 1
-	statusInFlight  byte = 2
-	statusFinalized byte = 3
-	statusDropped   byte = 4
+	statusPending     byte = 1
+	statusInFlight    byte = 2
+	statusFinalized   byte = 3
+	statusDropped     byte = 4
+	statusQuarantined byte = 5
 )
 
 // Status is the sequencer lifecycle of one admitted command.
 type Status string
 
 const (
-	StatusPending   Status = "pending"
-	StatusInFlight  Status = "in_flight"
-	StatusFinalized Status = "finalized"
-	StatusDropped   Status = "dropped"
+	StatusPending     Status = "pending"
+	StatusInFlight    Status = "in_flight"
+	StatusFinalized   Status = "finalized"
+	StatusDropped     Status = "dropped"
+	StatusQuarantined Status = "quarantined"
 )
 
 type record struct {
@@ -218,9 +220,9 @@ func canTransition(from, to Status) bool {
 	}
 	switch from {
 	case StatusPending:
-		return to == StatusInFlight || to == StatusFinalized || to == StatusDropped
+		return to == StatusInFlight || to == StatusFinalized || to == StatusDropped || to == StatusQuarantined
 	case StatusInFlight:
-		return to == StatusPending || to == StatusFinalized || to == StatusDropped
+		return to == StatusPending || to == StatusFinalized || to == StatusDropped || to == StatusQuarantined
 	default:
 		return false
 	}
@@ -236,6 +238,8 @@ func statusFromByte(v byte) (Status, error) {
 		return StatusFinalized, nil
 	case statusDropped:
 		return StatusDropped, nil
+	case statusQuarantined:
+		return StatusQuarantined, nil
 	default:
 		return "", fmt.Errorf("%w: status %d", ErrJournalCorrupt, v)
 	}
@@ -251,6 +255,8 @@ func statusByte(s Status) (byte, error) {
 		return statusFinalized, nil
 	case StatusDropped:
 		return statusDropped, nil
+	case StatusQuarantined:
+		return statusQuarantined, nil
 	default:
 		return 0, fmt.Errorf("%w: status %s", ErrJournalCorrupt, s)
 	}

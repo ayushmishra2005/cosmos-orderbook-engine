@@ -3,6 +3,7 @@ package types
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/arithmetic"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/domain"
@@ -55,6 +56,27 @@ var (
 	ErrInvariant          = errors.New("batch: revision invariant failed")
 	ErrPreviousCommitment = errors.New("batch: previous commitment mismatch")
 )
+
+// CommandRejection is a validator rejection of one command inside a batch.
+// Index is the position in the submitted command list.
+type CommandRejection struct {
+	Index int
+	Err   error
+}
+
+func (e *CommandRejection) Error() string {
+	if e == nil || e.Err == nil {
+		return "batch: command rejected"
+	}
+	return fmt.Sprintf("batch: command %d rejected: %v", e.Index, e.Err)
+}
+
+func (e *CommandRejection) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
 
 // BatchID identifies one ordered batch. It is not an exchange state root.
 type BatchID [32]byte

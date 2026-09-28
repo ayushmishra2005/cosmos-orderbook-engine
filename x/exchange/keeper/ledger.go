@@ -30,6 +30,9 @@ func (k Keeper) GetBalance(ctx context.Context, owner []byte, asset domain.Asset
 }
 
 func (k Keeper) setBalance(ctx context.Context, owner []byte, asset domain.AssetID, bal types.Balance) error {
+	if err := types.ValidateBalanceCapacity(bal.Available, bal.Locked); err != nil {
+		return err
+	}
 	key, err := canonical.EncodeBalanceKey(owner, asset)
 	if err != nil {
 		return err

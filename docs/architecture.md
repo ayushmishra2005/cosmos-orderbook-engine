@@ -33,7 +33,7 @@ baseAmount  = quantityLots * baseLotSize
 quoteAmount = quantityLots * priceTicks * quoteAtomsPerTickPerLot
 ```
 
-No `float32` or `float64` on the match or settlement path. Addition, subtraction, and multiplication are checked. Overflow and underflow return errors and do not wrap. A zero lot size or a zero quote-atoms-per-tick is an error.
+No `float32` or `float64` on the match or settlement path. Addition, subtraction, and multiplication are checked. Overflow and underflow return errors and do not wrap. A zero lot size or a zero quote-atoms-per-tick is an error. A balance is accepted only when `available + locked` fits in `uint64`, so a later release cannot overflow.
 
 Fees use parts per million:
 
@@ -98,11 +98,11 @@ The first finalized batch number is 1. The next number is the previous number pl
 
 `sequencer` accepts the same canonical signed commands as `x/batch`. HTTP JSON is only transport. One lock assigns the next position and appends the command to a local journal before the caller is told it was accepted. That acceptance is provisional.
 
-The batch loop reads the current batch head and exchange revision, freezes the oldest pending commands, and submits `MsgFinalizeBatch` through a normal Cosmos transaction. The submitter key stays in the SDK keyring. A rejected batch returns its commands to pending, except a nonce the chain has already passed, which is dropped. Finalized commands are not queued again after a restart.
+The batch loop reads the current batch head and exchange revision, freezes the oldest eligible pending commands, and submits `MsgFinalizeBatch` through a normal Cosmos transaction. The submitter key stays in the SDK keyring. A rejected batch returns its commands to pending, except a nonce the chain has already passed, which is dropped, and a command the validator permanently rejects, which is quarantined. A quarantined nonce blocks later commands from that owner. Commands from other owners stay in their relative journal order and can still be submitted. Finalized and quarantined commands are not queued again after a restart.
 
 The journal is not chain state. It is not an exchange state root.
 
-Admission metrics, batch timings, and the retry delay are local to the sequencer process. A failed batch is not broadcast again until that delay elapses. The delay doubles up to a cap and resets after a batch is included. It does not change command order. A rejected command stays pending unless its nonce is already behind the chain. An underfunded order is not dropped; a later deposit can make it valid.
+Admission metrics, batch timings, and the retry delay are local to the sequencer process. A failed batch is not broadcast again until that delay elapses. The delay doubles up to a cap and resets after a batch is included. It does not change the relative order of eligible commands. An underfunded order stays pending; a later deposit can make it valid. A permanently rejected command does not.
 
 `GET /health` reports pending and in-flight counts, the latest observed batch number, and whether the last chain call succeeded. `GET /metrics` serves Prometheus text. Neither response is an input to matching, fees, ordering, batch hashes, or state writes. A metrics recorder that panics is ignored. Wall-clock samples used for histograms are not written to the store.
 

@@ -89,6 +89,13 @@ func TestGenesisRejectsCorruptOrders(t *testing.T) {
 			gs.Balances[0].Locked = 0
 			gs.Balances[0].Available = 0
 		}, target: exchangetypes.ErrInvalidAmount},
+		{name: "balance capacity", edit: func(gs *GenesisState) {
+			gs.Orders = nil
+			gs.Nonces = nil
+			gs.OrderSequences = nil
+			gs.Balances[0].Available = math.MaxUint64
+			gs.Balances[0].Locked = 1
+		}, target: arithmetic.ErrOverflow},
 		{name: "reserve overflow", edit: func(gs *GenesisState) {
 			gs.Orders[0].Side = Side_SIDE_BUY
 			gs.Orders[0].PriceTicks = math.MaxUint64

@@ -6,6 +6,7 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
+	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/arithmetic"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/domain"
 )
 
@@ -113,13 +114,24 @@ type Balance struct {
 	Locked    uint64
 }
 
+// ValidateBalanceCapacity requires available+locked to fit in uint64.
+// A release adds locked back onto available, so a state that fails this
+// cannot be expired or cancelled.
+func ValidateBalanceCapacity(available, locked uint64) error {
+	if _, err := arithmetic.Add(available, locked); err != nil {
+		return err
+	}
+	return nil
+}
+
 // StoredOrder is the active-order record. TakerGross and MakerGross are the
 // filled gross already used for that role's cumulative fee. A buy accumulates
 // base atoms. A sell accumulates quote atoms. The two roles are not mixed.
 type StoredOrder struct {
-	Order      domain.Order
-	TakerGross uint64
-	MakerGross uint64
+	Order         domain.Order
+	TakerGross    uint64
+	MakerGross    uint64
+	ClientOrderID []byte
 }
 
 // Trade is one fill. Sequence is the per-market trade sequence.

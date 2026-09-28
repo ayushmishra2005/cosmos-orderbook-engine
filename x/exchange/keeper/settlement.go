@@ -93,13 +93,21 @@ func (s *balSet) add(i int, locked bool, amount uint64) error {
 	if amount == 0 {
 		return nil
 	}
+	next := s.items[i].bal
 	var err error
 	if locked {
-		s.items[i].bal.Locked, err = arithmetic.Add(s.items[i].bal.Locked, amount)
+		next.Locked, err = arithmetic.Add(next.Locked, amount)
 	} else {
-		s.items[i].bal.Available, err = arithmetic.Add(s.items[i].bal.Available, amount)
+		next.Available, err = arithmetic.Add(next.Available, amount)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if err := types.ValidateBalanceCapacity(next.Available, next.Locked); err != nil {
+		return err
+	}
+	s.items[i].bal = next
+	return nil
 }
 
 func (s *balSet) sub(i int, locked bool, amount uint64, under error) error {

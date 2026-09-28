@@ -108,6 +108,7 @@ type Service struct {
 	exhausted      bool
 	pending        []*item
 	inflight       []*item
+	quarantine     []*item
 	seen           map[[32]byte]struct{}
 	byPos          map[uint64]Status
 	backoff        time.Duration
@@ -163,13 +164,17 @@ func Open(cfg Config, chain Chain) (*Service, error) {
 			fix = append(fix, record{Position: it.position, Status: statusPending, Command: it.encoded})
 		}
 		s.byPos[it.position] = st
-		if st == StatusPending {
-			s.pending = append(s.pending, &item{
-				position: it.position,
-				cmd:      cloneCommand(it.cmd),
-				encoded:  append([]byte(nil), it.encoded...),
-				id:       it.id,
-			})
+		stored := &item{
+			position: it.position,
+			cmd:      cloneCommand(it.cmd),
+			encoded:  append([]byte(nil), it.encoded...),
+			id:       it.id,
+		}
+		switch st {
+		case StatusPending:
+			s.pending = append(s.pending, stored)
+		case StatusQuarantined:
+			s.quarantine = append(s.quarantine, stored)
 		}
 	}
 	if len(fix) > 0 {
@@ -214,7 +219,8 @@ func (s *Service) CommandStatus(position uint64) (Status, bool) {
 	return st, ok
 }
 
-// Pending returns admitted commands that are not finalized, oldest first.
+// Pending returns in-flight and pending commands, oldest first.
+// Quarantined commands are omitted. They are not eligible for a batch.
 func (s *Service) Pending() []Receipt {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -290,13 +296,40 @@ func (s *Service) submitOnce(ctx context.Context) error {
 		s.mu.Unlock()
 		return ErrEmptyBatch
 	}
-	n := s.cfg.MaxBatch
-	if n > len(s.pending) {
-		n = len(s.pending)
+	pending := append([]*item(nil), s.pending...)
+	quarantine := append([]*item(nil), s.quarantine...)
+	max := s.cfg.MaxBatch
+	s.mu.Unlock()
+
+	chosen, drops, err := s.planBatch(ctx, pending, quarantine, max)
+	if err != nil {
+		return err
 	}
-	batch := make([]*item, n)
-	copy(batch, s.pending[:n])
-	s.pending = append([]*item(nil), s.pending[n:]...)
+	s.mu.Lock()
+	batch, drops, rest := filterPending(s.pending, chosen, drops)
+	if len(drops) > 0 {
+		recs := make([]record, len(drops))
+		for i, it := range drops {
+			recs[i] = record{Position: it.position, Status: statusDropped, Command: it.encoded}
+			s.byPos[it.position] = StatusDropped
+		}
+		if err := s.appendJournal(recs); err != nil {
+			for _, it := range drops {
+				s.byPos[it.position] = StatusPending
+			}
+			s.syncGauges()
+			s.mu.Unlock()
+			return err
+		}
+	}
+	if len(batch) == 0 {
+		s.pending = rest
+		s.inflight = nil
+		s.syncGauges()
+		s.mu.Unlock()
+		return nil
+	}
+	s.pending = rest
 	s.inflight = batch
 	recs := make([]record, len(batch))
 	for i, it := range batch {
@@ -356,12 +389,17 @@ func (s *Service) restore(batch []*item) error {
 }
 
 func (s *Service) recover(ctx context.Context, batch []*item, cause error) error {
-	// Drop a command only when its nonce is already behind the chain.
-	// An underfunded order stays pending. A later deposit can make it valid.
-	// The caller waits out the retry delay before broadcasting again.
+	// A nonce already behind the chain is dropped.
+	// A permanently rejected command is quarantined and stays out of the queue.
+	// Anything else, including an underfunded order, returns to pending.
+	var rej *batchtypes.CommandRejection
+	permanentAt := -1
+	if errors.As(cause, &rej) && permanentCommand(rej.Err) && rej.Index >= 0 && rej.Index < len(batch) {
+		permanentAt = rej.Index
+	}
 	type decision struct {
-		it   *item
-		drop bool
+		it *item
+		st byte
 	}
 	decisions := make([]decision, len(batch))
 	for i, it := range batch {
@@ -372,18 +410,26 @@ func (s *Service) recover(ctx context.Context, batch []*item, cause error) error
 			}
 			return fmt.Errorf("%w: %v", ErrChainUnavailable, err)
 		}
-		decisions[i] = decision{it: it, drop: it.cmd.Nonce < next}
+		st := statusPending
+		if it.cmd.Nonce < next {
+			st = statusDropped
+		} else if i == permanentAt {
+			st = statusQuarantined
+		}
+		decisions[i] = decision{it: it, st: st}
 	}
 	recs := make([]record, len(decisions))
 	var keep []*item
+	var quar []*item
 	for i, d := range decisions {
-		st := statusPending
-		if d.drop {
-			st = statusDropped
-		} else {
+		switch d.st {
+		case statusDropped:
+		case statusQuarantined:
+			quar = append(quar, d.it)
+		default:
 			keep = append(keep, d.it)
 		}
-		recs[i] = record{Position: d.it.position, Status: st, Command: d.it.encoded}
+		recs[i] = record{Position: d.it.position, Status: d.st, Command: d.it.encoded}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -391,16 +437,97 @@ func (s *Service) recover(ctx context.Context, batch []*item, cause error) error
 		return err
 	}
 	for _, d := range decisions {
-		if d.drop {
+		switch d.st {
+		case statusDropped:
 			s.byPos[d.it.position] = StatusDropped
-		} else {
+		case statusQuarantined:
+			s.byPos[d.it.position] = StatusQuarantined
+		default:
 			s.byPos[d.it.position] = StatusPending
 		}
 	}
 	s.inflight = nil
 	s.pending = append(keep, s.pending...)
+	s.quarantine = append(s.quarantine, quar...)
 	s.syncGauges()
 	return fmt.Errorf("%w: %v", ErrBatchRejected, cause)
+}
+
+func (s *Service) planBatch(ctx context.Context, pending, quarantine []*item, max int) (chosen, drops []*item, err error) {
+	nonces := make(map[string]uint64)
+	load := func(owner []byte) error {
+		if _, ok := nonces[string(owner)]; ok {
+			return nil
+		}
+		next, err := s.queryNonce(ctx, owner)
+		if err != nil {
+			return err
+		}
+		nonces[string(owner)] = next
+		return nil
+	}
+	for _, group := range [][]*item{pending, quarantine} {
+		for _, it := range group {
+			if err := load(it.cmd.Owner); err != nil {
+				return nil, nil, fmt.Errorf("%w: %v", ErrChainUnavailable, err)
+			}
+		}
+	}
+	blocked := make(map[string]uint64)
+	for _, it := range quarantine {
+		key := string(it.cmd.Owner)
+		if it.cmd.Nonce < nonces[key] {
+			continue
+		}
+		if cur, ok := blocked[key]; !ok || it.cmd.Nonce < cur {
+			blocked[key] = it.cmd.Nonce
+		}
+	}
+	advanced := make(map[string]uint64)
+	for _, it := range pending {
+		if len(chosen) >= max {
+			break
+		}
+		key := string(it.cmd.Owner)
+		chainNext := nonces[key]
+		if it.cmd.Nonce < chainNext {
+			drops = append(drops, it)
+			continue
+		}
+		expect := chainNext + advanced[key]
+		if q, ok := blocked[key]; ok && it.cmd.Nonce > q && expect <= q {
+			continue
+		}
+		if it.cmd.Nonce != expect {
+			continue
+		}
+		chosen = append(chosen, it)
+		advanced[key]++
+	}
+	return chosen, drops, nil
+}
+
+func filterPending(pending, chosen, drops []*item) (batch, dropped, rest []*item) {
+	wantChosen := make(map[uint64]struct{}, len(chosen))
+	wantDrop := make(map[uint64]struct{}, len(drops))
+	for _, it := range chosen {
+		wantChosen[it.position] = struct{}{}
+	}
+	for _, it := range drops {
+		wantDrop[it.position] = struct{}{}
+	}
+	for _, it := range pending {
+		if _, ok := wantDrop[it.position]; ok {
+			dropped = append(dropped, it)
+			continue
+		}
+		if _, ok := wantChosen[it.position]; ok {
+			batch = append(batch, it)
+			continue
+		}
+		rest = append(rest, it)
+	}
+	return batch, dropped, rest
 }
 
 func (s *Service) mark(batch []*item, status Status, prepend bool) error {

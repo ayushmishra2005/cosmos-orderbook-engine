@@ -249,7 +249,7 @@ func (c *CosmosChain) Submit(ctx context.Context, msg *batchv1.MsgFinalizeBatch)
 		return fmt.Errorf("%w: broadcast: %v", ErrChainUnavailable, err)
 	}
 	if res.Code != 0 {
-		return fmt.Errorf("%w: checktx code %d: %s", ErrBatchRejected, res.Code, res.RawLog)
+		return rejectionError(fmt.Sprintf("checktx code %d: %s", res.Code, res.RawLog))
 	}
 	hash, err := hex.DecodeString(res.TxHash)
 	if err != nil || len(hash) == 0 {
@@ -263,7 +263,7 @@ func (c *CosmosChain) Submit(ctx context.Context, msg *batchv1.MsgFinalizeBatch)
 		result, err := c.node.Tx(ctx, hash, false)
 		if err == nil {
 			if result.TxResult.Code != 0 {
-				return fmt.Errorf("%w: code %d: %s", ErrBatchRejected, result.TxResult.Code, result.TxResult.Log)
+				return rejectionError(fmt.Sprintf("code %d: %s", result.TxResult.Code, result.TxResult.Log))
 			}
 			return nil
 		}

@@ -68,7 +68,7 @@ func mustCreate(t *testing.T, k Keeper, ctx sdk.Context, market types.Market) {
 	}
 }
 
-func fund(t *testing.T, k Keeper, ctx sdk.Context, owner []byte, asset domain.AssetID, available uint64) {
+func fund(t testing.TB, k Keeper, ctx sdk.Context, owner []byte, asset domain.AssetID, available uint64) {
 	t.Helper()
 	key, err := canonical.EncodeBalanceKey(owner, asset)
 	if err != nil {

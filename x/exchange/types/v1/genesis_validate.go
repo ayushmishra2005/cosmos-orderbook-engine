@@ -335,7 +335,7 @@ func (gs GenesisState) validateBalances(assets map[uint64]string, orders []Genes
 		if err != nil {
 			return err
 		}
-		if _, err := arithmetic.Add(bal.Available, bal.Locked); err != nil {
+		if err := exchangetypes.ValidateBalanceCapacity(bal.Available, bal.Locked); err != nil {
 			return err
 		}
 		if bal.Available == 0 && bal.Locked == 0 {

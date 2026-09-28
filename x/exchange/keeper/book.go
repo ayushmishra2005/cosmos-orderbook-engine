@@ -1,7 +1,6 @@
 package keeper
 
 import (
-	"bytes"
 	"context"
 	"errors"
 
@@ -190,14 +189,23 @@ func (k Keeper) putResting(ctx context.Context, order types.StoredOrder) error {
 	if err := kv.Set(ownerKey, append([]byte(nil), idVal...)); err != nil {
 		return err
 	}
-	if order.Order.TimeInForce != domain.TimeInForceGTD {
+	if order.Order.TimeInForce == domain.TimeInForceGTD {
+		expKey, err := canonical.EncodeExpirationKey(order.Order.ExpiryHeight, order.Order.ID)
+		if err != nil {
+			return err
+		}
+		if err := kv.Set(expKey, append([]byte(nil), idVal...)); err != nil {
+			return err
+		}
+	}
+	if len(order.ClientOrderID) == 0 {
 		return nil
 	}
-	expKey, err := canonical.EncodeExpirationKey(order.Order.ExpiryHeight, order.Order.ID)
+	clientKey, err := canonical.EncodeActiveClientOrderKey(order.Order.Owner, order.ClientOrderID)
 	if err != nil {
 		return err
 	}
-	return kv.Set(expKey, append([]byte(nil), idVal...))
+	return kv.Set(clientKey, append([]byte(nil), idVal...))
 }
 
 func (k Keeper) removeResting(ctx context.Context, order types.StoredOrder) error {
@@ -235,35 +243,12 @@ func (k Keeper) removeResting(ctx context.Context, order types.StoredOrder) erro
 			return err
 		}
 	}
-	return k.deleteClientOrder(ctx, order.Order.Owner, order.Order.ID)
-}
-
-func (k Keeper) deleteClientOrder(ctx context.Context, owner []byte, id domain.OrderID) error {
-	prefix, err := canonical.ActiveClientOrderPrefix(owner)
+	if len(order.ClientOrderID) == 0 {
+		return nil
+	}
+	clientKey, err := canonical.EncodeActiveClientOrderKey(order.Order.Owner, order.ClientOrderID)
 	if err != nil {
 		return err
 	}
-	kv, err := k.kv(ctx)
-	if err != nil {
-		return err
-	}
-	iter, err := kv.Iterator(prefix, prefixEnd(prefix))
-	if err != nil {
-		return err
-	}
-	var drop [][]byte
-	for ; iter.Valid(); iter.Next() {
-		if bytes.Equal(iter.Value(), id[:]) {
-			drop = append(drop, append([]byte(nil), iter.Key()...))
-		}
-	}
-	if err := iter.Close(); err != nil {
-		return err
-	}
-	for _, key := range drop {
-		if err := kv.Delete(key); err != nil {
-			return err
-		}
-	}
-	return nil
+	return kv.Delete(clientKey)
 }
