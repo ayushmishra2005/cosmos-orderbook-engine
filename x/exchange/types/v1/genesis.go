@@ -3,8 +3,6 @@ package v1
 import (
 	"fmt"
 
-	sdk "github.com/cosmos/cosmos-sdk/types"
-
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/domain"
 	exchangetypes "github.com/ayushmishra2005/cosmos-orderbook-engine/x/exchange/types"
 )
@@ -33,7 +31,9 @@ func DefaultGenesis() *GenesisState {
 	}
 }
 
-// Validate checks genesis structure. Bank backing is checked at init.
+// Validate checks genesis structure before any store write.
+// Bank custody is checked separately at init. Invalid orders and
+// locked balances are rejected, not repaired.
 func (gs GenesisState) Validate() error {
 	if gs.InstanceId != DefaultInstanceID {
 		return exchangetypes.ErrInstance
@@ -56,7 +56,7 @@ func (gs GenesisState) Validate() error {
 		assets[asset.Id] = asset.Denom
 		denoms[asset.Denom] = struct{}{}
 	}
-	markets := make(map[uint64]struct{}, len(gs.Markets))
+	markets := make(map[domain.MarketID]exchangetypes.Market, len(gs.Markets))
 	for _, market := range gs.Markets {
 		if market == nil {
 			return fmt.Errorf("nil market")
@@ -67,7 +67,7 @@ func (gs GenesisState) Validate() error {
 		if _, ok := assets[market.QuoteAssetId]; !ok {
 			return domain.ErrInvalidAsset
 		}
-		if err := (exchangetypes.Market{
+		parsed := exchangetypes.Market{
 			ID:                      domain.MarketID(market.Id),
 			BaseAssetID:             domain.AssetID(market.BaseAssetId),
 			QuoteAssetID:            domain.AssetID(market.QuoteAssetId),
@@ -77,46 +77,31 @@ func (gs GenesisState) Validate() error {
 			TakerFeePPM:             market.TakerFeePpm,
 			MaxMakerVisits:          market.MaxMakerVisits,
 			Enabled:                 market.Enabled,
-		}).Validate(); err != nil {
+		}
+		if err := parsed.Validate(); err != nil {
 			return err
 		}
-		if _, ok := markets[market.Id]; ok {
+		if _, ok := markets[parsed.ID]; ok {
 			return exchangetypes.ErrExists
 		}
-		markets[market.Id] = struct{}{}
+		markets[parsed.ID] = parsed
 	}
-	for _, bal := range gs.Balances {
-		if bal == nil {
-			return fmt.Errorf("nil balance")
-		}
-		if bal.Locked != 0 {
-			return fmt.Errorf("genesis locked balance is not backed by an order")
-		}
-		if bal.Available == 0 {
-			return exchangetypes.ErrInvalidAmount
-		}
-		if _, ok := assets[bal.AssetId]; !ok {
-			return domain.ErrInvalidAsset
-		}
-		if _, err := sdk.AccAddressFromBech32(bal.Owner); err != nil {
-			return err
-		}
+	orders, err := gs.activeOrders()
+	if err != nil {
+		return err
 	}
-	for _, nonce := range gs.Nonces {
-		if nonce == nil || nonce.Nonce == 0 {
-			return fmt.Errorf("command nonce must be positive")
-		}
-		if _, err := sdk.AccAddressFromBech32(nonce.Owner); err != nil {
-			return err
-		}
+	trades, err := gs.storedTrades(markets)
+	if err != nil {
+		return err
 	}
-	for _, seq := range append(append([]*MarketSequence{}, gs.OrderSequences...), gs.TradeSequences...) {
-		if seq == nil || seq.Sequence == 0 {
-			return domain.ErrInvalidSequence
-		}
-		if _, ok := markets[seq.MarketId]; !ok {
-			return domain.ErrInvalidMarket
-		}
+	if err := gs.validateBalances(assets, orders, markets); err != nil {
+		return err
 	}
-	return nil
+	if err := gs.validateNonces(orders); err != nil {
+		return err
+	}
+	if err := gs.validateSequences(markets, orders, trades); err != nil {
+		return err
+	}
+	return validateFeeGross(orders, trades)
 }

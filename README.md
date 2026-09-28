@@ -63,6 +63,12 @@ The project goal is a serious Cosmos SDK central limit order book: integer ticks
 - Explicit exchange, custody, and batch invariant checks
 - Failure injection, replay, property, and resource-limit tests
 
+**Implemented — milestone 9, genesis round trip**
+
+- Resting orders, locked balances, fee grosses, sequences, and trades export and import
+- Book, owner, client, and expiration indexes are rebuilt during genesis init
+- The batch commitment head is preserved, so the next batch extends the same chain
+
 **Planned**
 
 - Websocket feeds

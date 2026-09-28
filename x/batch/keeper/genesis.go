@@ -31,19 +31,21 @@ func (k Keeper) InitGenesis(ctx sdk.Context, gs v1.GenesisState) error {
 	if gs.LatestBatchNumber > 0 {
 		copy(head[:], gs.LatestBatchCommitment)
 	}
-	if err := k.setParams(ctx, types.Params{
-		Submitter: append([]byte(nil), submitter...),
-		Latest:    gs.LatestBatchNumber,
-		Head:      head,
-	}); err != nil {
-		return err
-	}
-	for _, batch := range batches {
-		if err := k.storeBatch(ctx, batch); err != nil {
+	return k.commit(ctx, func(ctx sdk.Context) error {
+		if err := k.setParams(ctx, types.Params{
+			Submitter: append([]byte(nil), submitter...),
+			Latest:    gs.LatestBatchNumber,
+			Head:      head,
+		}); err != nil {
 			return err
 		}
-	}
-	return nil
+		for _, batch := range batches {
+			if err := k.storeBatch(ctx, batch); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // ExportGenesis reads the head and batch records in number order.

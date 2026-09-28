@@ -243,7 +243,7 @@ func TestExportImportAvailableBalances(t *testing.T) {
 	require.NoError(t, restored.Keeper.CheckCustody(restored.NewContext(true)))
 }
 
-func TestExportOpenBookDoesNotValidate(t *testing.T) {
+func TestExportOpenBookValidates(t *testing.T) {
 	alice := replayTrader(8)
 	application := startApp(t, []funded{
 		{alice, coins("stake", 1_000_000_000_000, "base", 50)},
@@ -254,7 +254,14 @@ func TestExportOpenBookDoesNotValidate(t *testing.T) {
 	deliver(t, application, alice.priv, place(alice.addr, 1, exchangev1.Side_SIDE_SELL, exchangev1.OrderType_ORDER_TYPE_LIMIT, exchangev1.TimeInForce_TIME_IN_FORCE_GTC, 4, 3, 1), true)
 	gs, err := application.Keeper.ExportGenesis(application.NewContext(true))
 	require.NoError(t, err)
-	require.Error(t, gs.Validate())
+	require.NoError(t, gs.Validate())
+	require.Len(t, gs.Orders, 1)
+	require.Equal(t, uint64(4), gs.Orders[0].RemainingLots)
+	var locked uint64
+	for _, bal := range gs.Balances {
+		locked += bal.Locked
+	}
+	require.Equal(t, uint64(4), locked)
 }
 
 func TestRestartFromDatabase(t *testing.T) {

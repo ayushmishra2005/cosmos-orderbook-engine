@@ -7,6 +7,10 @@ option go_package = "github.com/ayushmishra2005/cosmos-orderbook-engine/x/exchan
 
 // GenesisState is the exchange portion of genesis.
 // Balances are accepted only when bank custody already covers them.
+// Active orders are authoritative. Book, owner, client, and expiration
+// indexes are rebuilt from those orders during InitGenesis.
+// Trades are included so the per-market trade sequence stays aligned
+// with the stored history.
 message GenesisState {
   string instance_id = 1;
 
@@ -17,14 +21,38 @@ message GenesisState {
   repeated MarketSequence order_sequences  = 6;
   repeated MarketSequence trade_sequences  = 7;
   uint64                  revision         = 8;
+  repeated GenesisOrder   orders           = 9;
+  repeated Trade          trades           = 10;
 }
 
-// GenesisBalance is an available balance. Locked must be zero.
+// GenesisBalance is one owner's available and locked atoms.
+// Locked atoms must equal the reserves of that owner's active orders.
 message GenesisBalance {
   string owner     = 1;
   uint64 asset_id  = 2;
   uint64 available = 3;
   uint64 locked    = 4;
+}
+
+// GenesisOrder is one resting order plus the fee grosses needed to
+// continue cumulative fee rounding. ClientOrderID is empty when the
+// order has no active client id. Indexes are not stored here.
+message GenesisOrder {
+  bytes       order_id        = 1;
+  string      owner           = 2;
+  uint64      market_id       = 3;
+  Side        side            = 4;
+  OrderType   order_type      = 5;
+  TimeInForce time_in_force   = 6;
+  uint64      price_ticks     = 7;
+  uint64      original_lots   = 8;
+  uint64      remaining_lots  = 9;
+  uint64      sequence        = 10;
+  uint64      expiry_height   = 11;
+  uint64      command_nonce   = 12;
+  uint64      taker_gross     = 13;
+  uint64      maker_gross     = 14;
+  bytes       client_order_id = 15;
 }
 
 message AccountNonce {

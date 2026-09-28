@@ -1,7 +1,9 @@
 package keeper
 
 import (
+	"bytes"
 	"context"
+	"sort"
 
 	sdkmath "cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -13,7 +15,9 @@ import (
 	v1 "github.com/ayushmishra2005/cosmos-orderbook-engine/x/exchange/types/v1"
 )
 
-// InitGenesis writes exchange genesis. Balances require bank custody.
+// InitGenesis writes exchange genesis after the whole document validates.
+// A validation error leaves the exchange store unchanged.
+// Book, owner, client, and expiration indexes are rebuilt from active orders.
 func (k Keeper) InitGenesis(ctx sdk.Context, gs v1.GenesisState) error {
 	if err := gs.Validate(); err != nil {
 		return err
@@ -21,9 +25,35 @@ func (k Keeper) InitGenesis(ctx sdk.Context, gs v1.GenesisState) error {
 	if string(k.instanceID) != gs.InstanceId {
 		return types.ErrInstance
 	}
+	if err := gs.ValidateOrderIDs(k.chainID); err != nil {
+		return err
+	}
 	if err := k.requireBacking(ctx, gs); err != nil {
 		return err
 	}
+	orders, err := gs.ActiveOrders()
+	if err != nil {
+		return err
+	}
+	trades, err := gs.StoredTrades()
+	if err != nil {
+		return err
+	}
+	sort.Slice(orders, func(i, j int) bool {
+		return bytes.Compare(orders[i].Order.Order.ID[:], orders[j].Order.Order.ID[:]) < 0
+	})
+	sort.Slice(trades, func(i, j int) bool {
+		if trades[i].MarketID != trades[j].MarketID {
+			return trades[i].MarketID < trades[j].MarketID
+		}
+		return trades[i].Sequence < trades[j].Sequence
+	})
+	return k.commit(ctx, func(ctx sdk.Context) error {
+		return k.writeGenesis(ctx, gs, orders, trades)
+	})
+}
+
+func (k Keeper) writeGenesis(ctx sdk.Context, gs v1.GenesisState, orders []v1.GenesisActiveOrder, trades []types.Trade) error {
 	for _, asset := range gs.Assets {
 		if err := k.initAsset(ctx, types.Asset{ID: domain.AssetID(asset.Id), Denom: asset.Denom}); err != nil {
 			return err
@@ -39,7 +69,17 @@ func (k Keeper) InitGenesis(ctx sdk.Context, gs v1.GenesisState) error {
 		if err != nil {
 			return err
 		}
-		if err := k.setBalance(ctx, owner, domain.AssetID(bal.AssetId), types.Balance{Available: bal.Available}); err != nil {
+		key, err := canonical.EncodeBalanceKey(owner, domain.AssetID(bal.AssetId))
+		if err != nil {
+			return err
+		}
+		if err := k.ensureAbsent(ctx, key); err != nil {
+			return err
+		}
+		if err := k.setBalance(ctx, owner, domain.AssetID(bal.AssetId), types.Balance{
+			Available: bal.Available,
+			Locked:    bal.Locked,
+		}); err != nil {
 			return err
 		}
 	}
@@ -52,6 +92,9 @@ func (k Keeper) InitGenesis(ctx sdk.Context, gs v1.GenesisState) error {
 		if err != nil {
 			return err
 		}
+		if err := k.ensureAbsent(ctx, key); err != nil {
+			return err
+		}
 		if err := k.setUint64(ctx, key, nonce.Nonce); err != nil {
 			return err
 		}
@@ -59,6 +102,9 @@ func (k Keeper) InitGenesis(ctx sdk.Context, gs v1.GenesisState) error {
 	for _, seq := range gs.OrderSequences {
 		key, err := canonical.EncodeMarketSequenceKey(domain.MarketID(seq.MarketId))
 		if err != nil {
+			return err
+		}
+		if err := k.ensureAbsent(ctx, key); err != nil {
 			return err
 		}
 		if err := k.setUint64(ctx, key, seq.Sequence); err != nil {
@@ -70,14 +116,111 @@ func (k Keeper) InitGenesis(ctx sdk.Context, gs v1.GenesisState) error {
 		if err != nil {
 			return err
 		}
+		if err := k.ensureAbsent(ctx, key); err != nil {
+			return err
+		}
 		if err := k.setUint64(ctx, key, seq.Sequence); err != nil {
 			return err
 		}
 	}
 	if gs.Revision > 0 {
-		if err := k.setUint64(ctx, canonical.EncodeExchangeRevisionKey(), gs.Revision); err != nil {
+		key := canonical.EncodeExchangeRevisionKey()
+		if err := k.ensureAbsent(ctx, key); err != nil {
 			return err
 		}
+		if err := k.setUint64(ctx, key, gs.Revision); err != nil {
+			return err
+		}
+	}
+	for _, order := range orders {
+		if err := k.writeGenesisOrder(ctx, order); err != nil {
+			return err
+		}
+	}
+	for _, trade := range trades {
+		key, err := canonical.EncodeTradeKey(trade.MarketID, trade.Sequence)
+		if err != nil {
+			return err
+		}
+		if err := k.ensureAbsent(ctx, key); err != nil {
+			return err
+		}
+		bz, err := types.EncodeTrade(trade)
+		if err != nil {
+			return err
+		}
+		kv, err := k.kv(ctx)
+		if err != nil {
+			return err
+		}
+		if err := kv.Set(key, bz); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (k Keeper) writeGenesisOrder(ctx context.Context, order v1.GenesisActiveOrder) error {
+	active, err := canonical.EncodeActiveOrderKey(order.Order.Order.ID)
+	if err != nil {
+		return err
+	}
+	if err := k.ensureAbsent(ctx, active); err != nil {
+		return err
+	}
+	book, err := bookKey(order.Order.Order)
+	if err != nil {
+		return err
+	}
+	if err := k.ensureAbsent(ctx, book); err != nil {
+		return err
+	}
+	ownerKey, err := canonical.EncodeOwnerOpenOrderKey(order.Order.Order.Owner, order.Order.Order.MarketID, order.Order.Order.ID)
+	if err != nil {
+		return err
+	}
+	if err := k.ensureAbsent(ctx, ownerKey); err != nil {
+		return err
+	}
+	if order.Order.Order.TimeInForce == domain.TimeInForceGTD {
+		expKey, err := canonical.EncodeExpirationKey(order.Order.Order.ExpiryHeight, order.Order.Order.ID)
+		if err != nil {
+			return err
+		}
+		if err := k.ensureAbsent(ctx, expKey); err != nil {
+			return err
+		}
+	}
+	var clientKey []byte
+	if len(order.ClientOrderID) > 0 {
+		clientKey, err = canonical.EncodeActiveClientOrderKey(order.Order.Order.Owner, order.ClientOrderID)
+		if err != nil {
+			return err
+		}
+		if err := k.ensureAbsent(ctx, clientKey); err != nil {
+			return err
+		}
+	}
+	if err := k.putResting(ctx, order.Order); err != nil {
+		return err
+	}
+	if len(clientKey) == 0 {
+		return nil
+	}
+	kv, err := k.kv(ctx)
+	if err != nil {
+		return err
+	}
+	return kv.Set(clientKey, append([]byte(nil), order.Order.Order.ID[:]...))
+}
+
+func (k Keeper) ensureAbsent(ctx context.Context, key []byte) error {
+	existing, err := k.get(ctx, key)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		return types.ErrExists
 	}
 	return nil
 }
@@ -92,7 +235,11 @@ func (k Keeper) requireBacking(ctx context.Context, gs v1.GenesisState) error {
 	}
 	sums := make(map[uint64]uint64)
 	for _, bal := range gs.Balances {
-		next, err := arithmetic.Add(sums[bal.AssetId], bal.Available)
+		row, err := arithmetic.Add(bal.Available, bal.Locked)
+		if err != nil {
+			return err
+		}
+		next, err := arithmetic.Add(sums[bal.AssetId], row)
 		if err != nil {
 			return err
 		}
@@ -109,6 +256,8 @@ func (k Keeper) requireBacking(ctx context.Context, gs v1.GenesisState) error {
 }
 
 // ExportGenesis reads exchange state in key order.
+// Secondary indexes are omitted. Client order IDs are copied onto the
+// active orders so InitGenesis can rebuild that index.
 func (k Keeper) ExportGenesis(ctx context.Context) (v1.GenesisState, error) {
 	gs := v1.GenesisState{InstanceId: string(k.instanceID)}
 	err := k.iteratePrefix(ctx, []byte{canonical.PrefixAsset}, func(_, value []byte) (bool, error) {
@@ -202,12 +351,114 @@ func (k Keeper) ExportGenesis(ctx context.Context) (v1.GenesisState, error) {
 	if err != nil {
 		return v1.GenesisState{}, err
 	}
+	clients := make(map[domain.OrderID]clientRef)
+	err = k.iteratePrefix(ctx, []byte{canonical.PrefixActiveClientOrder}, func(key, value []byte) (bool, error) {
+		owner, clientID, err := canonical.DecodeActiveClientOrderKey(key)
+		if err != nil {
+			return false, err
+		}
+		if len(value) != len(domain.OrderID{}) {
+			return false, types.ErrCorrupt
+		}
+		var id domain.OrderID
+		copy(id[:], value)
+		if _, ok := clients[id]; ok {
+			return false, types.ErrCorrupt
+		}
+		clients[id] = clientRef{
+			owner:  append([]byte(nil), owner...),
+			client: append([]byte(nil), clientID...),
+		}
+		return false, nil
+	})
+	if err != nil {
+		return v1.GenesisState{}, err
+	}
+	err = k.iteratePrefix(ctx, []byte{canonical.PrefixActiveOrder}, func(key, value []byte) (bool, error) {
+		id, err := canonical.DecodeActiveOrderKey(key)
+		if err != nil {
+			return false, err
+		}
+		order, err := types.DecodeOrder(id, value)
+		if err != nil {
+			return false, err
+		}
+		var client []byte
+		if ref, ok := clients[id]; ok {
+			if !bytes.Equal(ref.owner, order.Order.Owner) {
+				return false, types.ErrCorrupt
+			}
+			client = ref.client
+			delete(clients, id)
+		}
+		gs.Orders = append(gs.Orders, genesisOrderToProto(order, client))
+		return false, nil
+	})
+	if err != nil {
+		return v1.GenesisState{}, err
+	}
+	if len(clients) != 0 {
+		return v1.GenesisState{}, types.ErrCorrupt
+	}
+	err = k.iteratePrefix(ctx, []byte{canonical.PrefixTrade}, func(key, value []byte) (bool, error) {
+		marketID, sequence, err := canonical.DecodeTradeKey(key)
+		if err != nil {
+			return false, err
+		}
+		trade, err := types.DecodeTrade(value)
+		if err != nil {
+			return false, err
+		}
+		if trade.MarketID != marketID || trade.Sequence != sequence {
+			return false, types.ErrCorrupt
+		}
+		gs.Trades = append(gs.Trades, tradeProto(trade))
+		return false, nil
+	})
+	if err != nil {
+		return v1.GenesisState{}, err
+	}
+	sort.Slice(gs.Orders, func(i, j int) bool {
+		return bytes.Compare(gs.Orders[i].OrderId, gs.Orders[j].OrderId) < 0
+	})
+	sort.Slice(gs.Trades, func(i, j int) bool {
+		if gs.Trades[i].MarketId != gs.Trades[j].MarketId {
+			return gs.Trades[i].MarketId < gs.Trades[j].MarketId
+		}
+		return gs.Trades[i].Sequence < gs.Trades[j].Sequence
+	})
 	rev, err := k.GetRevision(ctx)
 	if err != nil {
 		return v1.GenesisState{}, err
 	}
 	gs.Revision = rev
 	return gs, nil
+}
+
+type clientRef struct {
+	owner  []byte
+	client []byte
+}
+
+func genesisOrderToProto(order types.StoredOrder, client []byte) *v1.GenesisOrder {
+	o := order.Order
+	return &v1.GenesisOrder{
+		OrderId:       append([]byte(nil), o.ID[:]...),
+		Owner:         addrString(o.Owner),
+		MarketId:      uint64(o.MarketID),
+		Side:          v1.Side(o.Side),
+		OrderType:     v1.OrderType(o.Type),
+		TimeInForce:   v1.TimeInForce(o.TimeInForce),
+		PriceTicks:    uint64(o.Price),
+		OriginalLots:  uint64(o.OriginalQuantity),
+		RemainingLots: uint64(o.RemainingQuantity),
+		Sequence:      uint64(o.Sequence),
+		ExpiryHeight:  o.ExpiryHeight,
+		CommandNonce:  o.CommandNonce,
+		TakerGross:    order.TakerGross,
+		MakerGross:    order.MakerGross,
+		ClientOrderId: append([]byte(nil), client...),
+	}
 }
 
 func marketFromProto(m *v1.Market) types.Market {
