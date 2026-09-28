@@ -139,6 +139,45 @@ func TestStreamReconnectDuplicateAndCancel(t *testing.T) {
 	waitClosed(t, sub)
 }
 
+func TestReconnectBeforeFirstEventReplays(t *testing.T) {
+	ev := eventsFromABCI(4, "AA", []abci.Event{tradeEvent(1, 9)})[0]
+	var dials int
+	var mu sync.Mutex
+	client := testStreamClient(4, func([]byte) ([]Event, error) {
+		t.Fatal("live frame was decoded")
+		return nil, nil
+	})
+	client.tip = func(context.Context) (int64, error) { return 4, nil }
+	client.pages = func(_ context.Context, height int64) ([]Event, error) {
+		if height != 4 {
+			t.Fatalf("height %d", height)
+		}
+		return []Event{ev}, nil
+	}
+	client.dialLive = func(context.Context) (liveConn, error) {
+		mu.Lock()
+		dials++
+		n := dials
+		mu.Unlock()
+		if n == 1 {
+			return &scriptConn{err: ErrStreamDisconnected}, nil
+		}
+		return &scriptConn{block: make(chan struct{})}, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sub, err := client.SubscribeTrades(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := readEvent(t, sub)
+	if got.ID != ev.ID || got.Trade.Sequence != 9 {
+		t.Fatalf("replay %+v", got)
+	}
+	cancel()
+	waitClosed(t, sub)
+}
+
 func TestSlowConsumerAndConnectionFailure(t *testing.T) {
 	client := testStreamClient(1, func(msg []byte) ([]Event, error) {
 		n, _ := strconv.Atoi(string(msg))

@@ -148,7 +148,14 @@ func (c *Client) subscribe(ctx context.Context, f streamFilter) (*Subscription, 
 
 func (c *Client) serve(ctx context.Context, sub *subscription, conn liveConn, f streamFilter) {
 	defer conn.Close()
+	// Seed the replay cursor from the height at subscribe time. A disconnect
+	// before any decoded event still has a block to replay from.
 	var last int64
+	if c.tip != nil {
+		if tip, err := c.tip(ctx); err == nil && tip > 0 {
+			last = tip
+		}
+	}
 	delay := c.delay
 	connected := true
 	frames, faults := readFrames(ctx, conn, c.buffer)

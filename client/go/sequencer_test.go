@@ -59,6 +59,34 @@ func TestSequencerProvisionalAdmission(t *testing.T) {
 	}
 }
 
+func TestSequencerRejectsNonUTF8Text(t *testing.T) {
+	priv := testPriv()
+	signer := privSigner{priv: priv}
+	chainID := "orderbook-test"
+	instance := []byte("orderbook-v1")
+	client := &Client{chainID: chainID, instance: append([]byte(nil), instance...)}
+	cmd, err := client.SignPlaceOrder(signer, 1, PlaceCommand{
+		MarketID: 1, Side: domain.SideBuy, Type: domain.OrderTypeLimit,
+		TimeInForce: domain.TimeInForceGTC, QuantityLots: 1, PriceTicks: 10,
+		ClientOrderID: []byte{0xff, 0xfe},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := NewSequencerClient("http://127.0.0.1:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seq.Submit(context.Background(), cmd); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatal(err)
+	}
+	cmd.Place.ClientOrderID = []byte("desk")
+	cmd.ExchangeInstanceID = []byte{0xff}
+	if _, err := seq.Submit(context.Background(), cmd); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatal(err)
+	}
+}
+
 func TestMarketOrderRequiresWorstPrice(t *testing.T) {
 	c := &Client{}
 	c.WithSigner(privSigner{priv: testPriv()})

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
@@ -144,6 +145,9 @@ func marshalCommand(cmd canonical.Command) ([]byte, error) {
 	if len(cmd.Owner) == 0 || len(cmd.PubKey) == 0 || len(cmd.Signature) == 0 {
 		return nil, fmt.Errorf("%w: signed command", ErrInvalidArgument)
 	}
+	if !utf8.ValidString(cmd.ChainID) || !utf8.Valid(cmd.ExchangeInstanceID) {
+		return nil, fmt.Errorf("%w: chain id and exchange instance id must be UTF-8 text", ErrInvalidArgument)
+	}
 	req := commandJSON{
 		ProtocolVersion:    cmd.ProtocolVersion,
 		ChainID:            cmd.ChainID,
@@ -157,6 +161,9 @@ func marshalCommand(cmd canonical.Command) ([]byte, error) {
 	case canonical.CommandTypePlace:
 		if cmd.Place == nil {
 			return nil, fmt.Errorf("%w: place command", ErrInvalidArgument)
+		}
+		if !utf8.Valid(cmd.Place.ClientOrderID) {
+			return nil, fmt.Errorf("%w: client order id must be UTF-8 text", ErrInvalidArgument)
 		}
 		req.CommandType = "place"
 		req.Place = &placeJSON{

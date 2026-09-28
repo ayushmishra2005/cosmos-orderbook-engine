@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -175,7 +176,7 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 }
 
 func decodeCommandJSON(body []byte) (canonical.Command, error) {
-	if len(bytesTrimSpace(body)) == 0 {
+	if len(bytesTrimSpace(body)) == 0 || !utf8.Valid(body) {
 		return canonical.Command{}, ErrMalformed
 	}
 	dec := json.NewDecoder(strings.NewReader(string(body)))

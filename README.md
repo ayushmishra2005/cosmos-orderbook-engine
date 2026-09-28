@@ -87,7 +87,7 @@ build/cosmos-orderbookd q exchange markets --home .localnet
 ./scripts/localnet4.sh smoke
 ```
 
-`smoke` deposits, matches one trade, and checks that the four nodes report the same exchange state. No batch is submitted, so each node reports the same empty batch head.
+`smoke` deposits, matches one trade, and checks that the four nodes report the same exchange state. No batch is submitted, so `query batch latest` is not found on every node.
 
 ## Direct order flow
 
@@ -122,7 +122,7 @@ In another shell, after the node is producing blocks:
 
 `--node` defaults to `http://127.0.0.1:26657`. The same values can be set with `ORDERBOOK_NODE`, `ORDERBOOK_CHAIN_ID`, `ORDERBOOK_INSTANCE_ID`, `ORDERBOOK_JOURNAL`, `ORDERBOOK_LISTEN`, `ORDERBOOK_FROM`, `ORDERBOOK_KEYRING_BACKEND`, `ORDERBOOK_HOME`, `ORDERBOOK_MAX_BATCH`, `ORDERBOOK_BATCH_INTERVAL`, `ORDERBOOK_RETRY_INITIAL`, `ORDERBOOK_RETRY_MAX`, `ORDERBOOK_FEES`, and `ORDERBOOK_GAS`.
 
-`POST /v1/commands` takes one JSON command. `chain_id`, `exchange_instance_id`, and `owner` are text. `pub_key`, `signature`, and `cancel.order_id` are hex. The signature is over the canonical batch-command bytes, not over this JSON. `GET /health` reports pending and in-flight counts, the latest observed batch, and chain connectivity. `GET /metrics` is Prometheus text. `GET /v1/pending` lists commands that are not yet finalized.
+`POST /v1/commands` takes one JSON command. `chain_id`, `exchange_instance_id`, `owner`, and `client_order_id` are UTF-8 text. `pub_key`, `signature`, and `cancel.order_id` are hex. The signature is over the canonical batch-command bytes, not over this JSON. A client order id or instance id that is not valid UTF-8 is rejected here; this HTTP body does not round-trip arbitrary bytes. `GET /health` reports pending and in-flight counts, the latest observed batch, and chain connectivity. `GET /metrics` is Prometheus text. `GET /v1/pending` lists commands that are not yet finalized.
 
 A failed broadcast waits `--retry-initial` (default 1s) before the next attempt. The wait doubles up to `--retry-max` (default 30s) and resets after a batch is included. The wait does not reorder commands.
 

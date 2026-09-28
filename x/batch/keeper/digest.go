@@ -13,12 +13,6 @@ import (
 
 const snapshotDomain = "cosmos-orderbook/test-batch-snapshot/v1"
 
-// StateDigestForTest hashes batch KV pairs in key order.
-// It is for tests. It is not a state root and it is not committed.
-func (k Keeper) StateDigestForTest(ctx context.Context) ([32]byte, error) {
-	return k.SnapshotDigest(ctx)
-}
-
 // SnapshotDigest is the test digest of the batch store.
 // It is not a consensus commitment.
 func (k Keeper) SnapshotDigest(ctx context.Context) ([32]byte, error) {

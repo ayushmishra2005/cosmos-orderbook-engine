@@ -90,9 +90,9 @@ func (k Keeper) CheckInvariants(ctx context.Context) error {
 // CheckCustody checks the internal liability identity and, when a bank keeper
 // is set, that module custody covers it.
 //
-// Fee-collector balances are included in the available and locked sums.
-// They are not added a second time. Bank custody may exceed the liability:
-// genesis accepts a module balance greater than the internal sum.
+// Fee-collector balances are excluded from the other owners' sums and added
+// once. Bank custody may exceed that liability: genesis accepts a module
+// balance greater than the internal sum.
 func (k Keeper) CheckCustody(ctx context.Context) error {
 	var available, locked, collector uint64
 	err := k.iteratePrefix(ctx, []byte{canonical.PrefixBalance}, func(key, value []byte) (bool, error) {

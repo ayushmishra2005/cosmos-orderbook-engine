@@ -19,9 +19,11 @@ import (
 // cancelled. A FOK order that cannot fully execute, including because of
 // self-trade or the visit cap, produces no fills.
 //
-// Expired makers are skipped and are not reported on the plan. Removing them
-// belongs to the keeper. The plan itself does not depend on map iteration,
-// goroutines, wall-clock time, or randomness.
+// The book is price-ordered, so the first maker outside the limit ends the
+// walk, even when that maker is expired. An expired maker still inside the
+// limit is skipped, counts toward the visit cap, and is not reported on the
+// plan. Removing it belongs to the keeper. The plan does not depend on map
+// iteration, goroutines, wall-clock time, or randomness.
 func Match(src OrderSource, in MatchInput) (MatchPlan, error) {
 	if src == nil {
 		return MatchPlan{}, ErrNilSource
@@ -82,16 +84,18 @@ func matchCrossing(src OrderSource, in MatchInput) (MatchPlan, error) {
 		if err := validateMaker(in.Incoming, maker); err != nil {
 			return MatchPlan{}, err
 		}
+		// Nothing behind a non-crossing price can cross, so an expired maker
+		// outside the limit is a price stop and does not consume the rest of
+		// the visit cap.
+		if !priceCrosses(in.Incoming, maker) {
+			stop = StopReasonPriceBoundary
+			break
+		}
 		if maker.ExpiredAt(in.ExecutionHeight) {
 			if err := src.Next(); err != nil {
 				return MatchPlan{}, err
 			}
 			continue
-		}
-		// A maker outside the limit does not cross, even if it is the same owner.
-		if !priceCrosses(in.Incoming, maker) {
-			stop = StopReasonPriceBoundary
-			break
 		}
 		if bytes.Equal(maker.Owner, in.Incoming.Owner) {
 			stop = StopReasonSelfTrade

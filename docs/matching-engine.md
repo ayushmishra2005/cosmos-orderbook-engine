@@ -15,7 +15,7 @@ The cursor for a buy is the ask book, lowest price first. The cursor for a sell 
 - Matching uses `RemainingQuantity`. `OriginalQuantity` is only an upper bound.
 - A maker is fully consumed before the next maker at that price. The only partial maker fill is the last fill, when the taker runs out. That maker keeps its sequence.
 
-`MaxMakerVisits == 0` means the pure function has no cap. A market record requires a non-zero cap, and the keeper passes that value. Every peeked maker counts, including an expired maker that is then skipped. When the cap stops the scan, the taker remainder is cancelled. It is not rested: unvisited makers might still cross, and a resting order must not cross the book.
+`MaxMakerVisits == 0` means the pure function has no cap. A market record requires a non-zero cap, and the keeper passes that value. The first maker outside the limit stops the walk, even when that maker is expired. Nothing behind that price can cross. An expired maker that is still inside the limit is skipped and counts as a visit. When the cap stops the scan, the taker remainder is cancelled. It is not rested: unvisited makers might still cross, and a resting order must not cross the book. `BeginBlock` removes at most 128 due orders, so a longer expired prefix that still crosses can exhaust the cap before a live maker is reached.
 
 ## Self-trade
 
@@ -23,7 +23,7 @@ There is one policy: cancel the taker remainder.
 
 If the next maker that is still inside the limit has the same owner, matching stops. Earlier fills against other owners are kept. The incoming remainder is not rested. The self maker is left on the book.
 
-A maker outside the limit is a normal price-boundary stop, even when the owner matches. The taker may rest. The books do not cross.
+A maker outside the limit is a normal price-boundary stop, even when the owner matches and even when that maker is expired. The taker may rest. The books do not cross.
 
 FOK is stricter. If self-trade, the visit cap, or a lack of quantity prevents a full fill, the plan has no fills. The simulated partial result is discarded.
 

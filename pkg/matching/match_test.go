@@ -312,6 +312,35 @@ func TestMatch(t *testing.T) {
 			},
 		},
 		{
+			name:     "expired_outside_limit_rests",
+			incoming: ord(9, alice, domain.SideBuy, domain.OrderTypeLimit, domain.TimeInForceGTC, 100, 10, 0, 0),
+			height:   100,
+			visits:   1,
+			makers: []domain.Order{
+				ord(1, bob, domain.SideSell, domain.OrderTypeLimit, domain.TimeInForceGTD, 200, 10, 1, 100),
+				ord(2, carol, domain.SideSell, domain.OrderTypeLimit, domain.TimeInForceGTD, 210, 10, 2, 100),
+			},
+			want: matching.MatchPlan{
+				RemainingQuantity: 10,
+				RestIncoming:      true,
+				StopReason:        matching.StopReasonPriceBoundary,
+			},
+		},
+		{
+			name:     "expired_bid_outside_limit_rests",
+			incoming: ord(9, alice, domain.SideSell, domain.OrderTypeLimit, domain.TimeInForceGTC, 100, 10, 0, 0),
+			height:   100,
+			visits:   1,
+			makers: []domain.Order{
+				ord(1, bob, domain.SideBuy, domain.OrderTypeLimit, domain.TimeInForceGTD, 50, 10, 1, 100),
+			},
+			want: matching.MatchPlan{
+				RemainingQuantity: 10,
+				RestIncoming:      true,
+				StopReason:        matching.StopReasonPriceBoundary,
+			},
+		},
+		{
 			name:     "gtd_rests",
 			incoming: ord(9, alice, domain.SideBuy, domain.OrderTypeLimit, domain.TimeInForceGTD, 100, 15, 0, 50),
 			height:   10,
@@ -392,6 +421,26 @@ func TestMatchLeavesUnconsumedMaker(t *testing.T) {
 		}
 		next, ok, err := src.Peek()
 		if err != nil || !ok || next.ID != oid(2) {
+			t.Fatalf("cursor = %+v ok %v %v", next.ID, ok, err)
+		}
+	})
+
+	t.Run("expired_outside_limit", func(t *testing.T) {
+		incoming := ord(9, alice, domain.SideBuy, domain.OrderTypeLimit, domain.TimeInForceGTC, 100, 10, 0, 0)
+		makers := []domain.Order{
+			ord(1, bob, domain.SideSell, domain.OrderTypeLimit, domain.TimeInForceGTD, 200, 10, 1, 100),
+		}
+		src := newBook(t, incoming, makers)
+		defer src.Close()
+		got, err := matching.Match(src, matching.MatchInput{Incoming: incoming, ExecutionHeight: 100, MaxMakerVisits: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.StopReason != matching.StopReasonPriceBoundary || !got.RestIncoming {
+			t.Fatalf("plan %+v", got)
+		}
+		next, ok, err := src.Peek()
+		if err != nil || !ok || next.ID != oid(1) {
 			t.Fatalf("cursor = %+v ok %v %v", next.ID, ok, err)
 		}
 	})

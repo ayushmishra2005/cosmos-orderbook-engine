@@ -385,6 +385,15 @@ func TestHTTPAdmission(t *testing.T) {
 		t.Fatalf("health %d", res.StatusCode)
 	}
 
+	raw, err := http.Post(ts.URL+"/v1/commands", "application/json", bytes.NewReader([]byte{0xff, 0xfe}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw.Body.Close()
+	if raw.StatusCode != http.StatusBadRequest {
+		t.Fatalf("non-utf8 %d", raw.StatusCode)
+	}
+
 	bad, err := http.Post(ts.URL+"/v1/commands", "application/json", bytes.NewReader([]byte("{")))
 	if err != nil {
 		t.Fatal(err)
