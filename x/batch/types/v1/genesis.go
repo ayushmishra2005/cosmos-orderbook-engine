@@ -27,7 +27,16 @@ func (gs GenesisState) Validate() error {
 	if uint64(len(gs.Batches)) != gs.LatestBatchNumber {
 		return batchtypes.ErrCorrupt
 	}
+	var zero batchtypes.BatchCommitment
+	if gs.LatestBatchNumber == 0 {
+		if len(gs.LatestBatchCommitment) != 0 && !bytes.Equal(gs.LatestBatchCommitment, zero[:]) {
+			return batchtypes.ErrCorrupt
+		}
+	} else if len(gs.LatestBatchCommitment) != len(zero) {
+		return batchtypes.ErrCorrupt
+	}
 	seen := make(map[batchtypes.BatchID]struct{}, len(gs.Batches))
+	var head batchtypes.BatchCommitment
 	for i, pb := range gs.Batches {
 		batch, err := BatchFromProto(pb)
 		if err != nil {
@@ -39,10 +48,17 @@ func (gs GenesisState) Validate() error {
 		if err := batch.Validate(); err != nil {
 			return err
 		}
+		if batch.Previous != head {
+			return batchtypes.ErrPreviousCommitment
+		}
 		if _, ok := seen[batch.ID]; ok {
 			return batchtypes.ErrCorrupt
 		}
 		seen[batch.ID] = struct{}{}
+		head = batch.Commitment
+	}
+	if gs.LatestBatchNumber > 0 && !bytes.Equal(gs.LatestBatchCommitment, head[:]) {
+		return batchtypes.ErrCorrupt
 	}
 	return nil
 }

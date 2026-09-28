@@ -124,11 +124,16 @@ func (e env) bal(t *testing.T, owner []byte, asset domain.AssetID) exchangetypes
 }
 
 func (e env) msg(number, rev uint64, cmds ...*v1.SignedCommand) *v1.MsgFinalizeBatch {
+	params, err := e.bk.GetParams(e.ctx)
+	if err != nil {
+		panic(err)
+	}
 	return &v1.MsgFinalizeBatch{
 		Submitter:                e.sub.addr.String(),
 		BatchNumber:              number,
 		ExpectedExchangeRevision: rev,
 		Commands:                 cmds,
+		PreviousBatchCommitment:  append([]byte(nil), params.Head[:]...),
 	}
 }
 
@@ -251,6 +256,25 @@ func (e env) noBatch(t *testing.T) {
 	if _, err := e.bk.LatestBatch(e.ctx); !errors.Is(err, types.ErrNotFound) {
 		t.Fatal(err)
 	}
+	params, err := e.bk.GetParams(e.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params.Latest != 0 || !params.Head.IsZero() {
+		t.Fatalf("head latest=%d commitment=%x", params.Latest, params.Head)
+	}
+	if _, err := e.bk.GetBatch(e.ctx, 1); !errors.Is(err, types.ErrNotFound) {
+		t.Fatal(err)
+	}
+}
+
+func (e env) head(t *testing.T) types.BatchCommitment {
+	t.Helper()
+	params, err := e.bk.GetParams(e.ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return params.Head
 }
 
 func TestFirstBatch(t *testing.T) {
@@ -312,6 +336,12 @@ func TestFirstBatch(t *testing.T) {
 	got, err := other.bk.GetBatch(other.ctx, 1)
 	if err != nil || got.ID != batch.ID || got.Results[0].OrderID != batch.Results[0].OrderID {
 		t.Fatalf("%+v %v", got, err)
+	}
+	if got.Previous != batch.Previous || got.Commitment != batch.Commitment || got.ResultsHash != batch.ResultsHash {
+		t.Fatalf("imported commitment %+v", got)
+	}
+	if !batch.Previous.IsZero() || e.head(t) != batch.Commitment {
+		t.Fatalf("head %x commitment %x", e.head(t), batch.Commitment)
 	}
 }
 
@@ -722,6 +752,205 @@ func resign(t *testing.T, tr trader, pb *v1.SignedCommand, e env) *v1.SignedComm
 	pb.PubKey = tr.priv.PubKey().Bytes()
 	pb.Signature = sig
 	return pb
+}
+
+func TestResultBytesMatchBatchStatus(t *testing.T) {
+	if canonical.ResultResting != types.StatusResting ||
+		canonical.ResultFilled != types.StatusFilled ||
+		canonical.ResultCancelled != types.StatusCancelled ||
+		canonical.ResultUnfilled != types.StatusUnfilled ||
+		byte(canonical.CommandTypePlace) != types.CommandPlace ||
+		byte(canonical.CommandTypeCancel) != types.CommandCancel {
+		t.Fatal("result bytes drifted")
+	}
+}
+
+func TestCommitmentChain(t *testing.T) {
+	e := setup(t)
+	alice := newTrader()
+	bob := newTrader()
+	e.fund(t, alice.addr, baseAsset, 20)
+	e.fund(t, bob.addr, quoteAsset, 1000)
+	if !bytes.Equal(canonical.GenesisBatchCommitment[:], make([]byte, 32)) {
+		t.Fatal("genesis commitment")
+	}
+	sell, _ := e.place(t, alice, 1, domain.SideSell, domain.OrderTypeLimit, domain.TimeInForceGTC, 10, 4)
+	wrong := e.msg(1, 1, sell)
+	wrong.PreviousBatchCommitment = bytes.Repeat([]byte{0xab}, 32)
+	if _, err := e.bk.FinalizeBatch(e.ctx, wrong); !errors.Is(err, types.ErrPreviousCommitment) {
+		t.Fatal(err)
+	}
+	e.noBatch(t)
+	if e.nonce(t, alice.addr) != 0 {
+		t.Fatal(e.nonce(t, alice.addr))
+	}
+
+	first, err := e.bk.FinalizeBatch(e.ctx, e.msg(1, 1, sell))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.Previous.IsZero() || first.Commitment.IsZero() || first.ResultsHash.IsZero() {
+		t.Fatalf("%x %x %x", first.Previous, first.Commitment, first.ResultsHash)
+	}
+	if e.head(t) != first.Commitment {
+		t.Fatal("head is not the first commitment")
+	}
+	rh, cm := recompute(t, e, first)
+	if rh != first.ResultsHash || cm != first.Commitment {
+		t.Fatal("stored commitment does not match the canonical digest")
+	}
+	againRH, againCM := recompute(t, e, first)
+	if againRH != rh || againCM != cm {
+		t.Fatal("replaying the batch changed the digests")
+	}
+
+	stale := e.msg(2, e.revision(t), mustPlace(t, e, bob, 1))
+	stale.PreviousBatchCommitment = make([]byte, 32)
+	if _, err := e.bk.FinalizeBatch(e.ctx, stale); !errors.Is(err, types.ErrPreviousCommitment) {
+		t.Fatal(err)
+	}
+	if e.head(t) != first.Commitment || e.nonce(t, bob.addr) != 0 || e.revision(t) != first.PostRevision {
+		t.Fatal("stale previous commitment changed state")
+	}
+	if _, err := e.bk.GetBatch(e.ctx, 2); !errors.Is(err, types.ErrNotFound) {
+		t.Fatal(err)
+	}
+
+	buy, _ := e.place(t, bob, 1, domain.SideBuy, domain.OrderTypeLimit, domain.TimeInForceGTC, 10, 4)
+	second, err := e.bk.FinalizeBatch(e.ctx, e.msg(2, e.revision(t), buy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Previous != first.Commitment || second.Commitment == first.Commitment || e.head(t) != second.Commitment {
+		t.Fatalf("chain prev %x c1 %x c2 %x head %x", second.Previous, first.Commitment, second.Commitment, e.head(t))
+	}
+	if _, cm2 := recompute(t, e, second); cm2 != second.Commitment {
+		t.Fatal("second commitment drifted")
+	}
+
+	third := e.msg(3, e.revision(t), mustPlace(t, e, alice, 2))
+	third.PreviousBatchCommitment = append([]byte(nil), first.Commitment[:]...)
+	if _, err := e.bk.FinalizeBatch(e.ctx, third); !errors.Is(err, types.ErrPreviousCommitment) {
+		t.Fatal(err)
+	}
+	if e.head(t) != second.Commitment {
+		t.Fatal("stale head replaced the current commitment")
+	}
+	if _, err := e.bk.GetBatch(e.ctx, 3); !errors.Is(err, types.ErrNotFound) {
+		t.Fatal(err)
+	}
+	qs := NewQueryServer(e.bk)
+	q1, err := qs.BatchCommitment(e.ctx, &v1.QueryBatchCommitmentRequest{BatchNumber: 1})
+	if err != nil || !bytes.Equal(q1.BatchCommitment, first.Commitment[:]) || !bytes.Equal(q1.ResultsHash, first.ResultsHash[:]) || !bytes.Equal(q1.BatchId, first.ID[:]) {
+		t.Fatalf("%+v %v", q1, err)
+	}
+	latest, err := qs.LatestBatch(e.ctx, &v1.QueryLatestBatchRequest{})
+	if err != nil || !bytes.Equal(latest.Batch.BatchCommitment, second.Commitment[:]) || !bytes.Equal(latest.Batch.PreviousBatchCommitment, first.Commitment[:]) {
+		t.Fatal(err)
+	}
+}
+
+func TestFailedBatchLeavesHead(t *testing.T) {
+	e := setup(t)
+	alice := newTrader()
+	e.fund(t, alice.addr, baseAsset, 10)
+	if _, err := e.bk.FinalizeBatch(e.ctx, e.msg(1, 1, mustPlace(t, e, alice, 1))); err != nil {
+		t.Fatal(err)
+	}
+	first, err := e.bk.GetBatch(e.ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rev := e.revision(t)
+	if _, err := e.bk.FinalizeBatch(e.ctx, e.msg(2, rev, mustPlace(t, e, alice, 2), mustPlace(t, e, alice, 2))); !errors.Is(err, exchangetypes.ErrWrongNonce) {
+		t.Fatal(err)
+	}
+	if e.head(t) != first.Commitment || e.revision(t) != rev || e.nonce(t, alice.addr) != 1 {
+		t.Fatalf("head %x nonce %d rev %d", e.head(t), e.nonce(t, alice.addr), e.revision(t))
+	}
+	if _, err := e.bk.GetBatch(e.ctx, 2); !errors.Is(err, types.ErrNotFound) {
+		t.Fatal(err)
+	}
+	latest, err := e.bk.LatestBatch(e.ctx)
+	if err != nil || latest.Number != 1 || latest.Commitment != first.Commitment || latest.ResultsHash != first.ResultsHash {
+		t.Fatalf("%+v %v", latest, err)
+	}
+}
+
+func recompute(t *testing.T, e env, batch types.Batch) (types.ResultsHash, types.BatchCommitment) {
+	t.Helper()
+	results := make([]canonical.Result, len(batch.Results))
+	for i, result := range batch.Results {
+		trades := make([]canonical.ResultTrade, len(result.Trades))
+		for j, trade := range result.Trades {
+			trades[j] = canonical.ResultTrade{MarketID: trade.MarketID, Sequence: trade.Sequence}
+		}
+		results[i] = canonical.Result{
+			Index: result.Index, Type: canonical.CommandType(result.Type), Owner: result.Owner,
+			OrderID: result.OrderID, Status: result.Status, Remaining: result.Remaining, Trades: trades,
+		}
+	}
+	rh, err := canonical.HashResults(results)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cm, err := canonical.HashBatchCommitment(canonical.BatchCommitmentInput{
+		Version: canonical.BatchCommitmentVersion, ChainID: chainID, ExchangeInstanceID: e.instance,
+		BatchNumber: batch.Number, BatchID: [32]byte(batch.ID), PreviousBatchCommitment: [32]byte(batch.Previous),
+		ExecutionHeight: batch.Height, PreExchangeRevision: batch.PreRevision,
+		PostExchangeRevision: batch.PostRevision, ResultsHash: rh,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return types.ResultsHash(rh), types.BatchCommitment(cm)
+}
+
+func TestBatchCodecRoundTrip(t *testing.T) {
+	owner := bytes.Repeat([]byte{0x02}, 20)
+	var id domain.OrderID
+	id[0] = 1
+	var batchID types.BatchID
+	batchID[0] = 2
+	var head, commitment types.BatchCommitment
+	head[0] = 3
+	commitment[0] = 5
+	var rh types.ResultsHash
+	rh[0] = 4
+	batch := types.Batch{
+		Number: 2, ID: batchID, Height: 9, PreRevision: 3, PostRevision: 4,
+		Previous: head, Commitment: commitment, ResultsHash: rh,
+		Results: []types.CommandResult{{
+			Index: 0, Type: types.CommandPlace, Owner: owner, OrderID: id,
+			Status: types.StatusFilled, Trades: []types.TradeRef{{MarketID: 1, Sequence: 1}},
+		}},
+	}
+	encoded, err := types.EncodeBatch(batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := types.DecodeBatch(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != batch.ID || got.Previous != batch.Previous || got.Commitment != batch.Commitment || got.ResultsHash != batch.ResultsHash || got.Height != 9 {
+		t.Fatalf("%+v", got)
+	}
+	if len(got.Results) != 1 || got.Results[0].OrderID != id || got.Results[0].Trades[0].Sequence != 1 {
+		t.Fatalf("%+v", got.Results)
+	}
+	params := types.Params{Submitter: owner, Latest: 2, Head: commitment}
+	raw, err := types.EncodeParams(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := types.DecodeParams(raw)
+	if err != nil || decoded.Latest != 2 || decoded.Head != commitment || !bytes.Equal(decoded.Submitter, owner) {
+		t.Fatalf("%+v %v", decoded, err)
+	}
+	if _, err := types.EncodeParams(types.Params{Submitter: owner, Head: head}); err == nil {
+		t.Fatal("genesis head must be zero")
+	}
 }
 
 func hasEvent(ctx sdk.Context, typ string) bool {

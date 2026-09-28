@@ -14,6 +14,18 @@ func BatchFromProto(pb *Batch) (batchtypes.Batch, error) {
 	}
 	var id batchtypes.BatchID
 	copy(id[:], pb.BatchId)
+	previous, err := commitmentFromBytes(pb.PreviousBatchCommitment)
+	if err != nil {
+		return batchtypes.Batch{}, err
+	}
+	commitment, err := commitmentFromBytes(pb.BatchCommitment)
+	if err != nil {
+		return batchtypes.Batch{}, err
+	}
+	resultsHash, err := resultsHashFromBytes(pb.ResultsHash)
+	if err != nil {
+		return batchtypes.Batch{}, err
+	}
 	results := make([]batchtypes.CommandResult, 0, len(pb.Results))
 	for _, result := range pb.Results {
 		decoded, err := resultFromProto(result)
@@ -28,8 +40,29 @@ func BatchFromProto(pb *Batch) (batchtypes.Batch, error) {
 		Height:       pb.ExecutionHeight,
 		PreRevision:  pb.PreExchangeRevision,
 		PostRevision: pb.PostExchangeRevision,
+		Previous:     previous,
+		Commitment:   commitment,
+		ResultsHash:  resultsHash,
 		Results:      results,
 	}, nil
+}
+
+func commitmentFromBytes(bz []byte) (batchtypes.BatchCommitment, error) {
+	if len(bz) != len(batchtypes.BatchCommitment{}) {
+		return batchtypes.BatchCommitment{}, batchtypes.ErrCorrupt
+	}
+	var out batchtypes.BatchCommitment
+	copy(out[:], bz)
+	return out, nil
+}
+
+func resultsHashFromBytes(bz []byte) (batchtypes.ResultsHash, error) {
+	if len(bz) != len(batchtypes.ResultsHash{}) {
+		return batchtypes.ResultsHash{}, batchtypes.ErrCorrupt
+	}
+	var out batchtypes.ResultsHash
+	copy(out[:], bz)
+	return out, nil
 }
 
 func resultFromProto(pb *CommandResult) (batchtypes.CommandResult, error) {
@@ -82,12 +115,15 @@ func BatchToProto(b batchtypes.Batch) (*Batch, error) {
 		results = append(results, pb)
 	}
 	return &Batch{
-		BatchNumber:          b.Number,
-		BatchId:              append([]byte(nil), b.ID[:]...),
-		ExecutionHeight:      b.Height,
-		PreExchangeRevision:  b.PreRevision,
-		PostExchangeRevision: b.PostRevision,
-		Results:              results,
+		BatchNumber:             b.Number,
+		BatchId:                 append([]byte(nil), b.ID[:]...),
+		ExecutionHeight:         b.Height,
+		PreExchangeRevision:     b.PreRevision,
+		PostExchangeRevision:    b.PostRevision,
+		PreviousBatchCommitment: append([]byte(nil), b.Previous[:]...),
+		BatchCommitment:         append([]byte(nil), b.Commitment[:]...),
+		ResultsHash:             append([]byte(nil), b.ResultsHash[:]...),
+		Results:                 results,
 	}, nil
 }
 

@@ -32,6 +32,14 @@ The project goal is a serious Cosmos SDK central limit order book: integer ticks
 - The batch is atomic: a failed command rolls back earlier commands, nonces, and the batch record
 - `BatchID` identifies the ordered batch. It is not an exchange state root
 
+**Implemented — milestone 5, batch commitments**
+
+- `ResultsHash` commits the ordered command results
+- `BatchCommitment` chains each finalized batch to the previous commitment
+- Batch 1 names 32 zero bytes as the previous commitment
+- A mismatched previous commitment is rejected and leaves the head unchanged
+- The commitment binds the batch, its results, the revisions, and the execution height. It is not an exchange state root, a validity proof, or a fraud proof
+
 **Planned**
 
 - Sequencer admission and batch building
@@ -52,7 +60,7 @@ The matcher returns a `MatchPlan`. It does not write state. Book order comes fro
 ```text
 pkg/domain          orders, sides, sequence, nonce
 pkg/arithmetic      checked integer math
-pkg/canonical       order IDs, state keys, batch command bytes
+pkg/canonical       order IDs, state keys, batch commands, results, commitments
 pkg/matching        pure matcher
 pkg/matching/memsource
 x/exchange          keeper, module, messages, queries

@@ -10,6 +10,8 @@ var (
 	ErrUnsupportedVersion   = errors.New("canonical: unsupported protocol version")
 	ErrInvalidCommand       = errors.New("canonical: invalid batch command")
 	ErrInvalidBatchIdentity = errors.New("canonical: invalid batch identity")
+	ErrInvalidResult        = errors.New("canonical: invalid command result")
+	ErrInvalidCommitment    = errors.New("canonical: invalid batch commitment")
 )
 
 const (

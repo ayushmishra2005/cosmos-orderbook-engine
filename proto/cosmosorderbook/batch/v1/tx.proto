@@ -23,10 +23,14 @@ message MsgFinalizeBatch {
   uint64 batch_number = 2;
   uint64 expected_exchange_revision = 3;
   repeated SignedCommand commands = 4;
+  // Previous commitment of the current head. Batch 1 uses 32 zero bytes.
+  bytes previous_batch_commitment = 5;
 }
 
 message MsgFinalizeBatchResponse {
   bytes batch_id = 1;
   uint64 post_exchange_revision = 2;
   repeated CommandResult results = 3;
+  bytes batch_commitment = 4;
+  bytes results_hash = 5;
 }

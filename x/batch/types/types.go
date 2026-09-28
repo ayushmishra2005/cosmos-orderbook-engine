@@ -39,20 +39,21 @@ const (
 )
 
 var (
-	ErrUnauthorized     = errors.New("batch: unauthorized submitter")
-	ErrBatchNumber      = errors.New("batch: unexpected batch number")
-	ErrStaleRevision    = errors.New("batch: stale exchange revision")
-	ErrInvalidSignature = errors.New("batch: invalid signature")
-	ErrPubKey           = errors.New("batch: unsupported public key")
-	ErrPubKeyMismatch   = errors.New("batch: public key does not match owner")
-	ErrChainID          = errors.New("batch: chain id mismatch")
-	ErrInstance         = errors.New("batch: exchange instance mismatch")
-	ErrEmpty            = errors.New("batch: empty batch")
-	ErrLimit            = errors.New("batch: too many commands")
-	ErrNotFound         = errors.New("batch: not found")
-	ErrCorrupt          = errors.New("batch: corrupt state")
-	ErrNegativeHeight   = errors.New("batch: negative block height")
-	ErrInvariant        = errors.New("batch: revision invariant failed")
+	ErrUnauthorized       = errors.New("batch: unauthorized submitter")
+	ErrBatchNumber        = errors.New("batch: unexpected batch number")
+	ErrStaleRevision      = errors.New("batch: stale exchange revision")
+	ErrInvalidSignature   = errors.New("batch: invalid signature")
+	ErrPubKey             = errors.New("batch: unsupported public key")
+	ErrPubKeyMismatch     = errors.New("batch: public key does not match owner")
+	ErrChainID            = errors.New("batch: chain id mismatch")
+	ErrInstance           = errors.New("batch: exchange instance mismatch")
+	ErrEmpty              = errors.New("batch: empty batch")
+	ErrLimit              = errors.New("batch: too many commands")
+	ErrNotFound           = errors.New("batch: not found")
+	ErrCorrupt            = errors.New("batch: corrupt state")
+	ErrNegativeHeight     = errors.New("batch: negative block height")
+	ErrInvariant          = errors.New("batch: revision invariant failed")
+	ErrPreviousCommitment = errors.New("batch: previous commitment mismatch")
 )
 
 // BatchID identifies one ordered batch. It is not an exchange state root.
@@ -61,10 +62,26 @@ type BatchID [32]byte
 // IsZero reports whether the identifier is all zeros.
 func (id BatchID) IsZero() bool { return id == BatchID{} }
 
-// Params is the batch head: who may submit, and the latest finalized number.
+// ResultsHash is the digest of the ordered command results.
+// It is not an exchange state root.
+type ResultsHash [32]byte
+
+// IsZero reports whether the digest is all zeros.
+func (h ResultsHash) IsZero() bool { return h == ResultsHash{} }
+
+// BatchCommitment binds one finalized batch to the previous commitment and its results hash.
+// The zero value is the genesis previous commitment. It is not an exchange state root.
+type BatchCommitment [32]byte
+
+// IsZero reports whether the commitment is all zeros.
+func (c BatchCommitment) IsZero() bool { return c == BatchCommitment{} }
+
+// Params is the batch head: who may submit, the latest number, and the latest commitment.
+// Head is 32 zero bytes before batch 1.
 type Params struct {
 	Submitter []byte
 	Latest    uint64
+	Head      BatchCommitment
 }
 
 // TradeRef identifies one fill by market and trade sequence.
@@ -91,6 +108,9 @@ type Batch struct {
 	Height       uint64
 	PreRevision  uint64
 	PostRevision uint64
+	Previous     BatchCommitment
+	Commitment   BatchCommitment
+	ResultsHash  ResultsHash
 	Results      []CommandResult
 }
 
@@ -98,6 +118,9 @@ type Batch struct {
 func (b Batch) Validate() error {
 	if b.Number == 0 || b.ID.IsZero() {
 		return ErrCorrupt
+	}
+	if b.Number == 1 && !b.Previous.IsZero() {
+		return ErrPreviousCommitment
 	}
 	n := len(b.Results)
 	if n == 0 || n > MaxCommands {

@@ -7,7 +7,7 @@ import (
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/domain"
 )
 
-const codecVersion byte = 1
+const codecVersion byte = 2
 
 func putU64(dst []byte, v uint64) []byte {
 	var buf [8]byte
@@ -70,14 +70,19 @@ func (r *reader) done() error {
 	return nil
 }
 
-// EncodeParams encodes the authorized submitter and the latest batch number.
+// EncodeParams encodes the submitter, the latest batch number, and the head commitment.
 func EncodeParams(p Params) ([]byte, error) {
 	if err := domain.ValidateOwner(p.Submitter); err != nil {
 		return nil, err
 	}
+	if p.Latest == 0 && !p.Head.IsZero() {
+		return nil, ErrCorrupt
+	}
 	dst := []byte{codecVersion, byte(len(p.Submitter))}
 	dst = append(dst, p.Submitter...)
-	return putU64(dst, p.Latest), nil
+	dst = putU64(dst, p.Latest)
+	dst = append(dst, p.Head[:]...)
+	return dst, nil
 }
 
 // DecodeParams reverses EncodeParams.
@@ -102,13 +107,22 @@ func DecodeParams(bz []byte) (Params, error) {
 	if err != nil {
 		return Params{}, err
 	}
+	headRaw, err := r.raw(32)
+	if err != nil {
+		return Params{}, err
+	}
 	if err := r.done(); err != nil {
 		return Params{}, err
 	}
 	if err := domain.ValidateOwner(submitter); err != nil {
 		return Params{}, ErrCorrupt
 	}
-	return Params{Submitter: submitter, Latest: latest}, nil
+	var head BatchCommitment
+	copy(head[:], headRaw)
+	if latest == 0 && !head.IsZero() {
+		return Params{}, ErrCorrupt
+	}
+	return Params{Submitter: submitter, Latest: latest, Head: head}, nil
 }
 
 // EncodeUint64 encodes a batch number stored in the ID index.
@@ -137,6 +151,9 @@ func EncodeBatch(b Batch) ([]byte, error) {
 	dst = putU64(dst, b.PreRevision)
 	dst = putU64(dst, b.PostRevision)
 	dst = append(dst, b.ID[:]...)
+	dst = append(dst, b.Previous[:]...)
+	dst = append(dst, b.Commitment[:]...)
+	dst = append(dst, b.ResultsHash[:]...)
 	dst = putU32(dst, uint32(len(b.Results)))
 	for _, result := range b.Results {
 		encoded, err := encodeResult(result)
@@ -196,6 +213,18 @@ func DecodeBatch(bz []byte) (Batch, error) {
 	if err != nil {
 		return Batch{}, err
 	}
+	prevRaw, err := r.raw(32)
+	if err != nil {
+		return Batch{}, err
+	}
+	commitmentRaw, err := r.raw(32)
+	if err != nil {
+		return Batch{}, err
+	}
+	hashRaw, err := r.raw(32)
+	if err != nil {
+		return Batch{}, err
+	}
 	count, err := r.u32()
 	if err != nil {
 		return Batch{}, err
@@ -216,12 +245,21 @@ func DecodeBatch(bz []byte) (Batch, error) {
 	}
 	var id BatchID
 	copy(id[:], idRaw)
+	var previous BatchCommitment
+	copy(previous[:], prevRaw)
+	var commitment BatchCommitment
+	copy(commitment[:], commitmentRaw)
+	var resultsHash ResultsHash
+	copy(resultsHash[:], hashRaw)
 	batch := Batch{
 		Number:       number,
 		ID:           id,
 		Height:       height,
 		PreRevision:  pre,
 		PostRevision: post,
+		Previous:     previous,
+		Commitment:   commitment,
+		ResultsHash:  resultsHash,
 		Results:      results,
 	}
 	if err := batch.Validate(); err != nil {

@@ -62,3 +62,20 @@ func (q queryServer) BatchByID(ctx context.Context, req *v1.QueryBatchByIDReques
 	}
 	return &v1.QueryBatchByIDResponse{Batch: pb}, nil
 }
+
+func (q queryServer) BatchCommitment(ctx context.Context, req *v1.QueryBatchCommitmentRequest) (*v1.QueryBatchCommitmentResponse, error) {
+	if req == nil || req.BatchNumber == 0 {
+		return nil, types.ErrNotFound
+	}
+	batch, err := q.k.GetBatch(ctx, req.BatchNumber)
+	if err != nil {
+		return nil, err
+	}
+	return &v1.QueryBatchCommitmentResponse{
+		BatchNumber:             batch.Number,
+		BatchId:                 append([]byte(nil), batch.ID[:]...),
+		PreviousBatchCommitment: append([]byte(nil), batch.Previous[:]...),
+		BatchCommitment:         append([]byte(nil), batch.Commitment[:]...),
+		ResultsHash:             append([]byte(nil), batch.ResultsHash[:]...),
+	}, nil
+}

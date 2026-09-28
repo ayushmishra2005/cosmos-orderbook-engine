@@ -11,4 +11,6 @@ message GenesisState {
   string submitter = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
   uint64 latest_batch_number = 2;
   repeated Batch batches = 3;
+  // Head commitment. Empty or 32 zero bytes before the first batch.
+  bytes latest_batch_commitment = 4;
 }

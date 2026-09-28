@@ -28,5 +28,7 @@ func (s msgServer) FinalizeBatch(ctx context.Context, msg *v1.MsgFinalizeBatch) 
 		BatchId:              append([]byte(nil), batch.ID[:]...),
 		PostExchangeRevision: batch.PostRevision,
 		Results:              pb.Results,
+		BatchCommitment:      append([]byte(nil), batch.Commitment[:]...),
+		ResultsHash:          append([]byte(nil), batch.ResultsHash[:]...),
 	}, nil
 }

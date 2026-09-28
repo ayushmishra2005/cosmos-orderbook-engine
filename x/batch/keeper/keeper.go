@@ -52,7 +52,8 @@ func NewKeeper(svc store.KVStoreService, chainID string, ex Exchange) (Keeper, e
 }
 
 // FinalizeBatch checks the batch, then runs every command in order inside one cache.
-// A failure discards the cache. Nonces and the batch record are not kept.
+// The results hash, commitment, and head are written only after every command succeeds.
+// A failure discards the cache.
 func (k Keeper) FinalizeBatch(ctx context.Context, msg *v1.MsgFinalizeBatch) (types.Batch, error) {
 	var out types.Batch
 	err := k.commit(ctx, func(ctx sdk.Context) error {
@@ -114,6 +115,13 @@ func (k Keeper) finalize(ctx sdk.Context, msg *v1.MsgFinalizeBatch) (types.Batch
 	if len(msg.Commands) > types.MaxCommands {
 		return types.Batch{}, types.ErrLimit
 	}
+	submitted, err := previousCommitment(msg.PreviousBatchCommitment)
+	if err != nil {
+		return types.Batch{}, err
+	}
+	if submitted != params.Head {
+		return types.Batch{}, types.ErrPreviousCommitment
+	}
 	commands := make([]canonical.Command, len(msg.Commands))
 	for i, pb := range msg.Commands {
 		cmd, err := commandFromProto(pb)
@@ -156,15 +164,23 @@ func (k Keeper) finalize(ctx sdk.Context, msg *v1.MsgFinalizeBatch) (types.Batch
 		Height:       height,
 		PreRevision:  pre,
 		PostRevision: post,
+		Previous:     submitted,
 		Results:      results,
 	}
 	if err := batch.Validate(); err != nil {
 		return types.Batch{}, err
 	}
+	resultsHash, commitment, err := k.batchHashes(batch)
+	if err != nil {
+		return types.Batch{}, err
+	}
+	batch.ResultsHash = resultsHash
+	batch.Commitment = commitment
 	if err := k.storeBatch(ctx, batch); err != nil {
 		return types.Batch{}, err
 	}
 	params.Latest = batch.Number
+	params.Head = batch.Commitment
 	if err := k.setParams(ctx, params); err != nil {
 		return types.Batch{}, err
 	}
@@ -366,22 +382,87 @@ func executionHeight(ctx sdk.Context) (uint64, error) {
 	return uint64(height), nil
 }
 
+func (k Keeper) batchHashes(batch types.Batch) (types.ResultsHash, types.BatchCommitment, error) {
+	resultsHash, err := canonical.HashResults(canonicalResults(batch.Results))
+	if err != nil {
+		return types.ResultsHash{}, types.BatchCommitment{}, err
+	}
+	commitment, err := canonical.HashBatchCommitment(canonical.BatchCommitmentInput{
+		Version:                 canonical.BatchCommitmentVersion,
+		ChainID:                 k.chainID,
+		ExchangeInstanceID:      k.ex.InstanceID(),
+		BatchNumber:             batch.Number,
+		BatchID:                 [32]byte(batch.ID),
+		PreviousBatchCommitment: [32]byte(batch.Previous),
+		ExecutionHeight:         batch.Height,
+		PreExchangeRevision:     batch.PreRevision,
+		PostExchangeRevision:    batch.PostRevision,
+		ResultsHash:             resultsHash,
+	})
+	if err != nil {
+		return types.ResultsHash{}, types.BatchCommitment{}, err
+	}
+	return types.ResultsHash(resultsHash), types.BatchCommitment(commitment), nil
+}
+
+func (k Keeper) verifyCommitment(batch types.Batch) error {
+	resultsHash, commitment, err := k.batchHashes(batch)
+	if err != nil {
+		return err
+	}
+	if resultsHash != batch.ResultsHash || commitment != batch.Commitment {
+		return types.ErrCorrupt
+	}
+	return nil
+}
+
+func canonicalResults(results []types.CommandResult) []canonical.Result {
+	out := make([]canonical.Result, len(results))
+	for i, result := range results {
+		trades := make([]canonical.ResultTrade, len(result.Trades))
+		for j, trade := range result.Trades {
+			trades[j] = canonical.ResultTrade{MarketID: trade.MarketID, Sequence: trade.Sequence}
+		}
+		out[i] = canonical.Result{
+			Index:     result.Index,
+			Type:      canonical.CommandType(result.Type),
+			Owner:     result.Owner,
+			OrderID:   result.OrderID,
+			Status:    result.Status,
+			Remaining: result.Remaining,
+			Trades:    trades,
+		}
+	}
+	return out
+}
+
+func previousCommitment(bz []byte) (types.BatchCommitment, error) {
+	if len(bz) != len(types.BatchCommitment{}) {
+		return types.BatchCommitment{}, types.ErrPreviousCommitment
+	}
+	var out types.BatchCommitment
+	copy(out[:], bz)
+	return out, nil
+}
+
 func emitFinalized(ctx sdk.Context, batch types.Batch) {
 	ctx.EventManager().EmitEvent(sdk.NewEvent(types.EventTypeBatchFinalized,
 		sdk.NewAttribute("batch_number", u64(batch.Number)),
-		sdk.NewAttribute("batch_id", batchIDString(batch.ID)),
+		sdk.NewAttribute("batch_id", hexEncoded(batch.ID[:])),
+		sdk.NewAttribute("batch_commitment", hexEncoded(batch.Commitment[:])),
+		sdk.NewAttribute("results_hash", hexEncoded(batch.ResultsHash[:])),
 		sdk.NewAttribute("command_count", u64(uint64(len(batch.Results)))),
 		sdk.NewAttribute("pre_revision", u64(batch.PreRevision)),
 		sdk.NewAttribute("post_revision", u64(batch.PostRevision)),
 	))
 }
 
-func batchIDString(id types.BatchID) string {
+func hexEncoded(b []byte) string {
 	const hex = "0123456789abcdef"
-	out := make([]byte, len(id)*2)
-	for i, b := range id {
-		out[i*2] = hex[b>>4]
-		out[i*2+1] = hex[b&0x0f]
+	out := make([]byte, len(b)*2)
+	for i, v := range b {
+		out[i*2] = hex[v>>4]
+		out[i*2+1] = hex[v&0x0f]
 	}
 	return string(out)
 }

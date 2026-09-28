@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"testing"
 
 	sdkmath "cosmossdk.io/math"
@@ -40,7 +41,8 @@ func TestBatchExecution(t *testing.T) {
 	buy, buyCmd := signedPlace(t, bob, 1, exchangev1.Side_SIDE_BUY, exchangev1.TimeInForce_TIME_IN_FORCE_GTC, 100, 10)
 	deliver(t, application, sub.priv, &batchv1.MsgFinalizeBatch{
 		Submitter: sub.addr.String(), BatchNumber: 1, ExpectedExchangeRevision: rev,
-		Commands: []*batchv1.SignedCommand{sell, buy},
+		PreviousBatchCommitment: make([]byte, 32),
+		Commands:                []*batchv1.SignedCommand{sell, buy},
 	}, true)
 
 	ctx := application.NewContext(true)
@@ -125,7 +127,8 @@ func TestBatchFailureLeavesExchangeUnchanged(t *testing.T) {
 	buy, _ := signedPlace(t, bob, 1, exchangev1.Side_SIDE_BUY, exchangev1.TimeInForce_TIME_IN_FORCE_GTC, 1001, 10)
 	deliver(t, application, sub.priv, &batchv1.MsgFinalizeBatch{
 		Submitter: sub.addr.String(), BatchNumber: 1, ExpectedExchangeRevision: rev,
-		Commands: []*batchv1.SignedCommand{sell, buy},
+		PreviousBatchCommitment: make([]byte, 32),
+		Commands:                []*batchv1.SignedCommand{sell, buy},
 	}, false)
 
 	ctx = application.NewContext(true)
@@ -199,4 +202,163 @@ func signedPlace(t *testing.T, tr trader, nonce uint64, side exchangev1.Side, ti
 		PubKey:    append([]byte(nil), cmd.PubKey...),
 		Signature: sig,
 	}, cmd
+}
+
+func signedCancel(t *testing.T, tr trader, nonce uint64, id domain.OrderID) (*batchv1.SignedCommand, canonical.Command) {
+	t.Helper()
+	cmd := canonical.Command{
+		ProtocolVersion:    canonical.BatchCommandVersion,
+		ChainID:            testChainID,
+		ExchangeInstanceID: []byte(exchangev1.DefaultInstanceID),
+		Owner:              tr.addr,
+		Nonce:              nonce,
+		Type:               canonical.CommandTypeCancel,
+		Cancel:             &canonical.Cancel{OrderID: id},
+		PubKey:             tr.priv.PubKey().Bytes(),
+	}
+	bz, err := canonical.CommandSignBytes(cmd)
+	require.NoError(t, err)
+	sig, err := tr.priv.Sign(bz)
+	require.NoError(t, err)
+	cmd.Signature = sig
+	return &batchv1.SignedCommand{
+		ProtocolVersion:    cmd.ProtocolVersion,
+		ChainId:            cmd.ChainID,
+		ExchangeInstanceId: append([]byte(nil), cmd.ExchangeInstanceID...),
+		Owner:              tr.addr.String(),
+		CommandNonce:       nonce,
+		CommandType:        batchv1.CommandType_COMMAND_TYPE_CANCEL_ORDER,
+		Cancel:             &batchv1.Cancel{OrderId: append([]byte(nil), id[:]...)},
+		PubKey:             append([]byte(nil), cmd.PubKey...),
+		Signature:          sig,
+	}, cmd
+}
+
+func TestBatchCommitmentChain(t *testing.T) {
+	alice := newTrader()
+	bob := newTrader()
+	sub := newTrader()
+	application := startBatchApp(t, []funded{
+		{alice, coins("stake", 1_000_000_000_000, "base", 1000)},
+		{bob, coins("stake", 1_000_000_000_000, "quote", 10_000)},
+		{sub, coins("stake", 1_000_000_000_000)},
+	}, sub.addr)
+
+	deliver(t, application, alice.priv, &exchangev1.MsgDeposit{
+		Owner: alice.addr.String(), Amount: sdk.NewInt64Coin("base", 1000),
+	}, true)
+	deliver(t, application, bob.priv, &exchangev1.MsgDeposit{
+		Owner: bob.addr.String(), Amount: sdk.NewInt64Coin("quote", 10_000),
+	}, true)
+
+	rev, err := application.Keeper.GetRevision(application.NewContext(true))
+	require.NoError(t, err)
+	sell, _ := signedPlace(t, alice, 1, exchangev1.Side_SIDE_SELL, exchangev1.TimeInForce_TIME_IN_FORCE_GTC, 150, 10)
+	buy, _ := signedPlace(t, bob, 1, exchangev1.Side_SIDE_BUY, exchangev1.TimeInForce_TIME_IN_FORCE_GTC, 100, 10)
+	deliver(t, application, sub.priv, &batchv1.MsgFinalizeBatch{
+		Submitter: sub.addr.String(), BatchNumber: 1, ExpectedExchangeRevision: rev,
+		PreviousBatchCommitment: make([]byte, 32),
+		Commands:                []*batchv1.SignedCommand{sell, buy},
+	}, true)
+
+	ctx := application.NewContext(true)
+	first, err := application.BatchKeeper.GetBatch(ctx, 1)
+	require.NoError(t, err)
+	require.True(t, first.Previous.IsZero())
+	c1 := first.Commitment
+	require.False(t, c1.IsZero())
+	requireResults(t, application, first)
+
+	cancel, _ := signedCancel(t, alice, 2, first.Results[0].OrderID)
+	deliver(t, application, sub.priv, &batchv1.MsgFinalizeBatch{
+		Submitter: sub.addr.String(), BatchNumber: 2, ExpectedExchangeRevision: first.PostRevision,
+		PreviousBatchCommitment: append([]byte(nil), c1[:]...),
+		Commands:                []*batchv1.SignedCommand{cancel},
+	}, true)
+
+	ctx = application.NewContext(true)
+	second, err := application.BatchKeeper.GetBatch(ctx, 2)
+	require.NoError(t, err)
+	require.Equal(t, c1, second.Previous)
+	require.NotEqual(t, c1, second.Commitment)
+	requireResults(t, application, second)
+	params, err := application.BatchKeeper.GetParams(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), params.Latest)
+	require.Equal(t, second.Commitment, params.Head)
+
+	qs := batchkeeper.NewQueryServer(application.BatchKeeper)
+	q1, err := qs.Batch(ctx, &batchv1.QueryBatchRequest{BatchNumber: 1})
+	require.NoError(t, err)
+	require.Equal(t, first.ID[:], q1.Batch.BatchId)
+	require.Equal(t, first.ResultsHash[:], q1.Batch.ResultsHash)
+	require.Equal(t, c1[:], q1.Batch.BatchCommitment)
+	require.Equal(t, make([]byte, 32), q1.Batch.PreviousBatchCommitment)
+	q2, err := qs.Batch(ctx, &batchv1.QueryBatchRequest{BatchNumber: 2})
+	require.NoError(t, err)
+	require.Equal(t, second.ID[:], q2.Batch.BatchId)
+	require.Equal(t, second.ResultsHash[:], q2.Batch.ResultsHash)
+	require.Equal(t, c1[:], q2.Batch.PreviousBatchCommitment)
+	require.Equal(t, second.Commitment[:], q2.Batch.BatchCommitment)
+	latest, err := qs.LatestBatch(ctx, &batchv1.QueryLatestBatchRequest{})
+	require.NoError(t, err)
+	require.Equal(t, second.Commitment[:], latest.Batch.BatchCommitment)
+	only, err := qs.BatchCommitment(ctx, &batchv1.QueryBatchCommitmentRequest{BatchNumber: 2})
+	require.NoError(t, err)
+	require.Equal(t, second.Commitment[:], only.BatchCommitment)
+	require.Equal(t, second.ResultsHash[:], only.ResultsHash)
+
+	beforeRev, err := application.Keeper.GetRevision(ctx)
+	require.NoError(t, err)
+	aliceBal := mustBal(t, application, alice.addr, 1)
+	bobBal := mustBal(t, application, bob.addr, 2)
+	bobNonce := mustNonce(t, application, bob.addr)
+	rest, _ := signedPlace(t, bob, bobNonce+1, exchangev1.Side_SIDE_BUY, exchangev1.TimeInForce_TIME_IN_FORCE_GTC, 1, 10)
+	deliver(t, application, sub.priv, &batchv1.MsgFinalizeBatch{
+		Submitter: sub.addr.String(), BatchNumber: 3, ExpectedExchangeRevision: beforeRev,
+		PreviousBatchCommitment: bytes.Repeat([]byte{0x11}, 32),
+		Commands:                []*batchv1.SignedCommand{rest},
+	}, false)
+
+	ctx = application.NewContext(true)
+	gotRev, err := application.Keeper.GetRevision(ctx)
+	require.NoError(t, err)
+	require.Equal(t, beforeRev, gotRev)
+	require.Equal(t, aliceBal, mustBal(t, application, alice.addr, 1))
+	require.Equal(t, bobBal, mustBal(t, application, bob.addr, 2))
+	require.Equal(t, bobNonce, mustNonce(t, application, bob.addr))
+	params, err = application.BatchKeeper.GetParams(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), params.Latest)
+	require.Equal(t, second.Commitment, params.Head)
+	_, err = application.BatchKeeper.GetBatch(ctx, 3)
+	require.ErrorIs(t, err, batchtypes.ErrNotFound)
+	requireCustody(t, application)
+}
+
+func requireResults(t *testing.T, application *App, batch batchtypes.Batch) {
+	t.Helper()
+	results := make([]canonical.Result, len(batch.Results))
+	for i, result := range batch.Results {
+		trades := make([]canonical.ResultTrade, len(result.Trades))
+		for j, trade := range result.Trades {
+			trades[j] = canonical.ResultTrade{MarketID: trade.MarketID, Sequence: trade.Sequence}
+		}
+		results[i] = canonical.Result{
+			Index: result.Index, Type: canonical.CommandType(result.Type), Owner: result.Owner,
+			OrderID: result.OrderID, Status: result.Status, Remaining: result.Remaining, Trades: trades,
+		}
+	}
+	rh, err := canonical.HashResults(results)
+	require.NoError(t, err)
+	require.Equal(t, batchtypes.ResultsHash(rh), batch.ResultsHash)
+	cm, err := canonical.HashBatchCommitment(canonical.BatchCommitmentInput{
+		Version: canonical.BatchCommitmentVersion, ChainID: testChainID,
+		ExchangeInstanceID: application.Keeper.InstanceID(), BatchNumber: batch.Number,
+		BatchID: [32]byte(batch.ID), PreviousBatchCommitment: [32]byte(batch.Previous),
+		ExecutionHeight: batch.Height, PreExchangeRevision: batch.PreRevision,
+		PostExchangeRevision: batch.PostRevision, ResultsHash: rh,
+	})
+	require.NoError(t, err)
+	require.Equal(t, batchtypes.BatchCommitment(cm), batch.Commitment)
 }

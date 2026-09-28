@@ -92,6 +92,8 @@ message CommandResult {
 }
 
 // Batch is one finalized batch record.
+// BatchCommitment binds this batch to the previous commitment and ResultsHash.
+// It is not an exchange state root.
 message Batch {
   uint64 batch_number = 1;
   bytes batch_id = 2;
@@ -99,4 +101,7 @@ message Batch {
   uint64 pre_exchange_revision = 4;
   uint64 post_exchange_revision = 5;
   repeated CommandResult results = 6;
+  bytes previous_batch_commitment = 7;
+  bytes batch_commitment = 8;
+  bytes results_hash = 9;
 }

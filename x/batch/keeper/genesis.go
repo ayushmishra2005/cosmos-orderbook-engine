@@ -16,17 +16,29 @@ func (k Keeper) InitGenesis(ctx sdk.Context, gs v1.GenesisState) error {
 	if err != nil {
 		return err
 	}
-	if err := k.setParams(ctx, types.Params{
-		Submitter: append([]byte(nil), submitter...),
-		Latest:    gs.LatestBatchNumber,
-	}); err != nil {
-		return err
-	}
+	batches := make([]types.Batch, 0, len(gs.Batches))
 	for _, pb := range gs.Batches {
 		batch, err := v1.BatchFromProto(pb)
 		if err != nil {
 			return err
 		}
+		if err := k.verifyCommitment(batch); err != nil {
+			return err
+		}
+		batches = append(batches, batch)
+	}
+	var head types.BatchCommitment
+	if gs.LatestBatchNumber > 0 {
+		copy(head[:], gs.LatestBatchCommitment)
+	}
+	if err := k.setParams(ctx, types.Params{
+		Submitter: append([]byte(nil), submitter...),
+		Latest:    gs.LatestBatchNumber,
+		Head:      head,
+	}); err != nil {
+		return err
+	}
+	for _, batch := range batches {
 		if err := k.storeBatch(ctx, batch); err != nil {
 			return err
 		}
@@ -41,8 +53,9 @@ func (k Keeper) ExportGenesis(ctx sdk.Context) (v1.GenesisState, error) {
 		return v1.GenesisState{}, err
 	}
 	gs := v1.GenesisState{
-		Submitter:         sdk.AccAddress(params.Submitter).String(),
-		LatestBatchNumber: params.Latest,
+		Submitter:             sdk.AccAddress(params.Submitter).String(),
+		LatestBatchNumber:     params.Latest,
+		LatestBatchCommitment: append([]byte(nil), params.Head[:]...),
 	}
 	for number := uint64(1); number <= params.Latest; number++ {
 		batch, err := k.GetBatch(ctx, number)

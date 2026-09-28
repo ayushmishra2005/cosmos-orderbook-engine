@@ -18,7 +18,7 @@ x/exchange
 x/batch
 ```
 
-`pkg/canonical` depends only on `pkg/domain`. It encodes order IDs, state keys, and signed batch commands. `x/exchange` may import the packages above. `x/batch` may call `x/exchange`. `x/exchange` must not import `x/batch`. `pkg/*` must not import `x/exchange`, `x/batch`, the app, or a Cosmos keeper.
+`pkg/canonical` depends only on `pkg/domain`. It encodes order IDs, state keys, signed batch commands, command results, and batch commitments. `x/exchange` may import the packages above. `x/batch` may call `x/exchange`. `x/exchange` must not import `x/batch`. `pkg/*` must not import `x/exchange`, `x/batch`, the app, or a Cosmos keeper.
 
 `Match` returns a plan. It does not write balances, delete orders, or assign sequences. The keeper opens one side of one market as an `OrderSource`, calls `Match`, closes the cursor, and only then builds an execution plan. One place or cancel runs inside a single `CacheContext`. The cache is written only after the plan validates. Any error discards it.
 
@@ -76,17 +76,23 @@ Place and cancel either commit every exchange write or leave the store unchanged
 
 ## Batch execution
 
-`MsgFinalizeBatch` carries a batch number, the exchange revision the commands were built against, and ordered `PlaceOrder` and `CancelOrder` commands. Deposits and withdrawals stay ordinary transactions. Validators execute the commands themselves, in the submitted order, through `x/exchange`. Later commands see the balances, orders, nonces, and revision written by earlier commands in the same batch.
+`MsgFinalizeBatch` carries a batch number, the exchange revision the commands were built against, the previous batch commitment, and ordered `PlaceOrder` and `CancelOrder` commands. Deposits and withdrawals stay ordinary transactions. Validators execute the commands themselves, in the submitted order, through `x/exchange`. Later commands see the balances, orders, nonces, and revision written by earlier commands in the same batch.
 
-The batch is one cache around those calls. The exchange keeper still opens its own cache for each command. If any check or command fails, neither cache is kept: orders, trades, nonces, the revision, and the batch record all stay as they were. There is no partial batch.
+The batch is one cache around those calls. The exchange keeper still opens its own cache for each command. If any check or command fails, neither cache is kept: orders, trades, nonces, the revision, the batch record, the results hash, and the commitment head all stay as they were. There is no partial batch.
 
 Each command is signed by its owner with secp256k1 over canonical bytes (`cosmos-orderbook/batch-command/v1`), not JSON or protobuf. The public key must derive the owner. The chain ID, exchange instance, and protocol version must match. The command uses the exchange account nonce, the same nonce as a direct place or cancel.
 
-For this milestone one genesis address may submit batches. That authorization is temporary and centralized. There is no sequencer, submitter rotation, or proof system.
+One genesis address may submit batches. That authorization is temporary and centralized. There is no sequencer, submitter rotation, or proof system.
 
 The first finalized batch number is 1. The next number is the previous number plus one. A duplicate, skipped, or older number is rejected. The current exchange revision must equal `expectedExchangeRevision` before the first command runs. `BeginBlock` expiration can advance the revision before transactions in that block.
 
 `BatchID` is SHA-256 over `cosmos-orderbook/batch-id/v1`, the batch number, the expected revision, and the ordered signed commands. It identifies that batch. It is not an exchange state root.
+
+`ResultsHash` is SHA-256 over `cosmos-orderbook/batch-results/v1` and the ordered command results. Each result is the command index, type, owner, order ID, final status, remaining quantity, and the ordered trade sequences. Results stay in command order.
+
+`BatchCommitment` is SHA-256 over `cosmos-orderbook/batch-commitment/v1`, version 1, chain ID, exchange instance, batch number, `BatchID`, the previous commitment, execution height, pre and post exchange revisions, and `ResultsHash`. The height is the consensus block height. Batch 1's previous commitment is 32 zero bytes. A later batch must name the current head. The head changes only after every command succeeds.
+
+`BatchCommitment` binds the accepted batch to its previous commitment and its execution result. It does not prove the full exchange state. Validators still re-execute the batch. It is not a validity proof, a fraud proof, or a data-availability proof.
 
 ## Application
 

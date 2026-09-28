@@ -23,7 +23,7 @@ func GetQueryCmd() *cobra.Command {
 		SuggestionsMinimumDistance: 2,
 		RunE:                       client.ValidateCmd,
 	}
-	cmd.AddCommand(batchCmd(), latestCmd(), byIDCmd())
+	cmd.AddCommand(batchCmd(), latestCmd(), byIDCmd(), commitmentCmd())
 	return cmd
 }
 
@@ -88,6 +88,31 @@ func byIDCmd() *cobra.Command {
 				return fmt.Errorf("batch id must be 32 bytes of hex")
 			}
 			res, err := v1.NewQueryClient(clientCtx).BatchByID(cmd.Context(), &v1.QueryBatchByIDRequest{BatchId: id})
+			if err != nil {
+				return err
+			}
+			return clientCtx.PrintProto(res)
+		},
+	}
+	flags.AddQueryFlagsToCmd(cmd)
+	return cmd
+}
+
+func commitmentCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "commitment [batch-number]",
+		Short: "Query one batch commitment",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			clientCtx, err := client.GetClientQueryContext(cmd)
+			if err != nil {
+				return err
+			}
+			number, err := strconv.ParseUint(args[0], 10, 64)
+			if err != nil {
+				return err
+			}
+			res, err := v1.NewQueryClient(clientCtx).BatchCommitment(cmd.Context(), &v1.QueryBatchCommitmentRequest{BatchNumber: number})
 			if err != nil {
 				return err
 			}

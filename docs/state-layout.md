@@ -48,10 +48,12 @@ Asks store the raw tick. The lowest ask sorts first for the same reason, without
 
 ## x/batch
 
-`x/batch` uses its own module store. These prefixes are independent of `x/exchange`. A batch record stores the batch number, batch ID, execution height, pre and post exchange revisions, and a per-command summary. It does not copy the book.
+`x/batch` uses its own module store. These prefixes are independent of `x/exchange`. A batch record stores the batch number, batch ID, previous commitment, batch commitment, results hash, execution height, pre and post exchange revisions, command count, and a per-command summary. It does not copy the book.
 
 | Prefix | Key | Value |
 | --- | --- | --- |
-| `0x01` | (none) | authorized submitter and latest batch number |
+| `0x01` | (none) | authorized submitter, latest batch number, and head commitment |
 | `0x02` | batch number | batch record |
 | `0x03` | batch ID | batch number |
+
+Both values use codec version 2. The head commitment is 32 bytes. Before batch 1 it is 32 zero bytes, and batch 1 must name that value as its previous commitment. The batch record stores that previous commitment, its own `BatchCommitment`, and the `ResultsHash` beside the command summaries. The order book is not stored again.

@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"encoding/hex"
+	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -34,7 +36,10 @@ func finalizeCmd() *cobra.Command {
 
 Each command is signed by its owner with secp256k1 over the canonical
 batch-command bytes, not over this JSON. --from must be the authorized
-batch submitter. The submitter does not own the commands.`,
+batch submitter. The submitter does not own the commands.
+
+--previous-commitment is 32 bytes of hex. Batch 1 uses 64 zero digits.
+A later batch must name the current head commitment.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			clientCtx, err := client.GetClientTxContext(cmd)
@@ -50,9 +55,23 @@ batch submitter. The submitter does not own the commands.`,
 				return err
 			}
 			msg.Submitter = clientCtx.GetFromAddress().String()
+			prev, err := cmd.Flags().GetString(flagPreviousCommitment)
+			if err != nil {
+				return err
+			}
+			if prev != "" {
+				raw, err := hex.DecodeString(prev)
+				if err != nil || len(raw) != 32 {
+					return fmt.Errorf("previous commitment must be 32 bytes of hex")
+				}
+				msg.PreviousBatchCommitment = raw
+			}
 			return tx.GenerateOrBroadcastTxCLI(clientCtx, cmd.Flags(), &msg)
 		},
 	}
 	flags.AddTxFlagsToCmd(cmd)
+	cmd.Flags().String(flagPreviousCommitment, "", "previous batch commitment as 64 hex characters")
 	return cmd
 }
+
+const flagPreviousCommitment = "previous-commitment"
