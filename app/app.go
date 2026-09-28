@@ -46,7 +46,9 @@ type App struct {
 }
 
 // New builds the application and loads the latest version.
-func New(logger log.Logger, db dbm.DB, chainID string) (*App, error) {
+// baseAppOptions are the standard Cosmos SDK BaseApp options, including
+// minimum gas prices and pruning when the process is started from the server.
+func New(logger log.Logger, db dbm.DB, chainID string, baseAppOptions ...func(*baseapp.BaseApp)) (*App, error) {
 	if chainID == "" {
 		return nil, fmt.Errorf("chain id is required")
 	}
@@ -94,7 +96,9 @@ func New(logger log.Logger, db dbm.DB, chainID string) (*App, error) {
 		AccountKeeper: account,
 		stakingKeeper: stakingKeeper,
 	}
-	app.App = builder.Build(db, baseapp.SetChainID(chainID))
+	options := append([]func(*baseapp.BaseApp){}, baseAppOptions...)
+	options = append(options, baseapp.SetChainID(chainID))
+	app.App = builder.Build(db, options...)
 	if err := app.RegisterStores(storeKey, batchStoreKey); err != nil {
 		return nil, err
 	}
@@ -114,7 +118,14 @@ func (app *App) TxConfig() client.TxConfig { return app.txConfig }
 func (app *App) Codec() codec.Codec { return app.cdc }
 
 // ExportAppStateAndValidators writes the current application state.
-func (app *App) ExportAppStateAndValidators(_ bool, _ []string, modulesToExport []string) (servertypes.ExportedApp, error) {
+// The returned height is the next block to execute. Committed state already
+// includes LastBlockHeight, and the SDK stores this value as genesis
+// initial_height.
+// Zero-height export is rejected. This chain does not reset staking state.
+func (app *App) ExportAppStateAndValidators(forZeroHeight bool, _ []string, modulesToExport []string) (servertypes.ExportedApp, error) {
+	if forZeroHeight {
+		return servertypes.ExportedApp{}, fmt.Errorf("zero-height export is not supported")
+	}
 	ctx := app.NewContext(true)
 	genState, err := app.ModuleManager.ExportGenesisForModules(ctx, app.cdc, modulesToExport)
 	if err != nil {
@@ -131,7 +142,7 @@ func (app *App) ExportAppStateAndValidators(_ bool, _ []string, modulesToExport 
 	return servertypes.ExportedApp{
 		AppState:        appState,
 		Validators:      validators,
-		Height:          app.LastBlockHeight(),
+		Height:          app.LastBlockHeight() + 1,
 		ConsensusParams: app.GetConsensusParams(ctx),
 	}, nil
 }

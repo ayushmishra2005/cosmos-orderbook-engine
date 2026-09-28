@@ -5,6 +5,7 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
+	"github.com/ayushmishra2005/cosmos-orderbook-engine/internal/telemetry"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/domain"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/x/exchange/types"
 	v1 "github.com/ayushmishra2005/cosmos-orderbook-engine/x/exchange/types/v1"
@@ -73,6 +74,9 @@ func (s msgServer) PlaceOrder(ctx context.Context, msg *v1.MsgPlaceOrder) (*v1.M
 	if err != nil {
 		return nil, err
 	}
+	if committedBlock(ctx) {
+		telemetry.RecordPlace(len(res.Fills), 0, 0)
+	}
 	return &v1.MsgPlaceOrderResponse{
 		OrderId:       append([]byte(nil), res.OrderID[:]...),
 		RemainingLots: uint64(res.Remaining),
@@ -97,6 +101,9 @@ func (s msgServer) CancelOrder(ctx context.Context, msg *v1.MsgCancelOrder) (*v1
 	if err != nil {
 		return nil, err
 	}
+	if committedBlock(ctx) {
+		telemetry.RecordCancel()
+	}
 	return &v1.MsgCancelOrderResponse{
 		OrderId:  append([]byte(nil), res.OrderID[:]...),
 		AssetId:  uint64(res.AssetID),
@@ -105,27 +112,44 @@ func (s msgServer) CancelOrder(ctx context.Context, msg *v1.MsgCancelOrder) (*v1
 }
 
 func asSide(v v1.Side) (domain.Side, error) {
-	side := domain.Side(v)
-	if !side.Valid() {
+	switch v {
+	case v1.Side_SIDE_BUY:
+		return domain.SideBuy, nil
+	case v1.Side_SIDE_SELL:
+		return domain.SideSell, nil
+	default:
 		return 0, domain.ErrInvalidSide
 	}
-	return side, nil
 }
 
 func asOrderType(v v1.OrderType) (domain.OrderType, error) {
-	typ := domain.OrderType(v)
-	if !typ.Valid() {
+	switch v {
+	case v1.OrderType_ORDER_TYPE_LIMIT:
+		return domain.OrderTypeLimit, nil
+	case v1.OrderType_ORDER_TYPE_MARKET:
+		return domain.OrderTypeMarket, nil
+	default:
 		return 0, domain.ErrInvalidOrderType
 	}
-	return typ, nil
 }
 
 func asTimeInForce(v v1.TimeInForce) (domain.TimeInForce, error) {
-	tif := domain.TimeInForce(v)
-	if !tif.Valid() {
+	switch v {
+	case v1.TimeInForce_TIME_IN_FORCE_GTC:
+		return domain.TimeInForceGTC, nil
+	case v1.TimeInForce_TIME_IN_FORCE_IOC:
+		return domain.TimeInForceIOC, nil
+	case v1.TimeInForce_TIME_IN_FORCE_FOK:
+		return domain.TimeInForceFOK, nil
+	case v1.TimeInForce_TIME_IN_FORCE_GTD:
+		return domain.TimeInForceGTD, nil
+	default:
 		return 0, domain.ErrInvalidTimeInForce
 	}
-	return tif, nil
+}
+
+func committedBlock(ctx context.Context) bool {
+	return sdk.UnwrapSDKContext(ctx).ExecMode() == sdk.ExecModeFinalize
 }
 
 func orderIDFromBytes(bz []byte) (domain.OrderID, error) {

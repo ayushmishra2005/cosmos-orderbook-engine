@@ -106,7 +106,7 @@ func TestGenesisRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 
 	restored := restartFromExport(t, application)
-	ctx = restored.NewContext(true)
+	ctx = qctx(restored)
 	gotEx, err := restored.Keeper.SnapshotDigest(ctx)
 	require.NoError(t, err)
 	gotBatch, err := restored.BatchKeeper.SnapshotDigest(ctx)
@@ -132,24 +132,24 @@ func TestGenesisRoundTrip(t *testing.T) {
 	dup.ClientOrderId = []byte("desk-a")
 	deliver(t, restored, alice.priv, dup, false)
 	require.Equal(t, uint64(2), mustNonce(t, restored, alice.addr))
-	require.NoError(t, restored.Keeper.CheckInvariants(restored.NewContext(true)))
+	require.NoError(t, restored.Keeper.CheckInvariants(qctx(restored)))
 
 	deliver(t, restored, carol.priv, &exchangev1.MsgCancelOrder{
 		Owner: carol.addr.String(), OrderId: carolID[:], CommandNonce: 2,
 	}, true)
-	_, err = restored.Keeper.GetOrder(restored.NewContext(true), carolID)
+	_, err = restored.Keeper.GetOrder(qctx(restored), carolID)
 	require.ErrorIs(t, err, exchangetypes.ErrNotFound)
 	require.Equal(t, exchangetypes.Balance{Available: 1_000}, mustBal(t, restored, carol.addr, 2))
 
 	deliver(t, restored, bob.priv, place(bob.addr, 1, exchangev1.Side_SIDE_BUY, exchangev1.OrderType_ORDER_TYPE_LIMIT, exchangev1.TimeInForce_TIME_IN_FORCE_GTC, 6, 20, 3), true)
-	_, err = restored.Keeper.GetOrder(restored.NewContext(true), sellID)
+	_, err = restored.Keeper.GetOrder(qctx(restored), sellID)
 	require.ErrorIs(t, err, exchangetypes.ErrNotFound)
-	filled, err := restored.Keeper.GetTrade(restored.NewContext(true), 1, 2)
+	filled, err := restored.Keeper.GetTrade(qctx(restored), 1, 2)
 	require.NoError(t, err)
 	require.Equal(t, domain.Quantity(6), filled.Quantity)
 	require.Equal(t, sellID, filled.MakerOrderID)
 
-	ctx = restored.NewContext(true)
+	ctx = qctx(restored)
 	rev, err = restored.Keeper.GetRevision(ctx)
 	require.NoError(t, err)
 	deliver(t, restored, sub.priv, &batchv1.MsgFinalizeBatch{
@@ -157,7 +157,7 @@ func TestGenesisRoundTrip(t *testing.T) {
 		PreviousBatchCommitment: append([]byte(nil), preHead[:]...),
 		Commands:                []*batchv1.SignedCommand{replayPlace(t, alice, 3, 1, exchangev1.Side_SIDE_SELL, 1, 30)},
 	}, true)
-	ctx = restored.NewContext(true)
+	ctx = qctx(restored)
 	next, err := restored.BatchKeeper.LatestBatch(ctx)
 	require.NoError(t, err)
 	require.Equal(t, uint64(2), next.Number)
@@ -193,34 +193,34 @@ func TestGenesisGTDExpiryContinuity(t *testing.T) {
 	require.Equal(t, expiry, stored.Order.ExpiryHeight)
 
 	restored := restartFromExport(t, application)
-	imported, err := restored.Keeper.GetOrder(restored.NewContext(true), id)
+	imported, err := restored.Keeper.GetOrder(qctx(restored), id)
 	require.NoError(t, err)
 	require.Equal(t, expiry, imported.Order.ExpiryHeight)
 	require.Equal(t, exchangetypes.Balance{Locked: 4}, mustBal(t, restored, alice.addr, 1))
 
-	rev, err := restored.Keeper.GetRevision(restored.NewContext(true))
+	rev, err := restored.Keeper.GetRevision(qctx(restored))
 	require.NoError(t, err)
 	advanceTo(t, restored, int64(expiry)-1)
-	still, err := restored.Keeper.GetOrder(restored.NewContext(true), id)
+	still, err := restored.Keeper.GetOrder(qctx(restored), id)
 	require.NoError(t, err)
 	require.Equal(t, expiry, still.Order.ExpiryHeight)
 	require.Equal(t, exchangetypes.Balance{Locked: 4}, mustBal(t, restored, alice.addr, 1))
-	sameRev, err := restored.Keeper.GetRevision(restored.NewContext(true))
+	sameRev, err := restored.Keeper.GetRevision(qctx(restored))
 	require.NoError(t, err)
 	require.Equal(t, rev, sameRev)
 
 	advanceTo(t, restored, int64(expiry))
-	_, err = restored.Keeper.GetOrder(restored.NewContext(true), id)
+	_, err = restored.Keeper.GetOrder(qctx(restored), id)
 	require.ErrorIs(t, err, exchangetypes.ErrNotFound)
 	require.Equal(t, exchangetypes.Balance{Available: 4}, mustBal(t, restored, alice.addr, 1))
-	after, err := restored.Keeper.GetRevision(restored.NewContext(true))
+	after, err := restored.Keeper.GetRevision(qctx(restored))
 	require.NoError(t, err)
 	require.Equal(t, rev+1, after)
-	require.NoError(t, restored.Keeper.CheckInvariants(restored.NewContext(true)))
+	require.NoError(t, restored.Keeper.CheckInvariants(qctx(restored)))
 
 	advanceTo(t, restored, int64(expiry)+1)
 	require.Equal(t, exchangetypes.Balance{Available: 4}, mustBal(t, restored, alice.addr, 1))
-	again, err := restored.Keeper.GetRevision(restored.NewContext(true))
+	again, err := restored.Keeper.GetRevision(qctx(restored))
 	require.NoError(t, err)
 	require.Equal(t, after, again)
 }
@@ -243,7 +243,7 @@ func TestGenesisClientOrderIDContinuity(t *testing.T) {
 	dup.ClientOrderId = []byte("desk-1")
 	deliver(t, restored, alice.priv, dup, false)
 	require.Equal(t, uint64(1), mustNonce(t, restored, alice.addr))
-	_, err := restored.Keeper.GetOrder(restored.NewContext(true), id)
+	_, err := restored.Keeper.GetOrder(qctx(restored), id)
 	require.NoError(t, err)
 
 	deliver(t, restored, alice.priv, &exchangev1.MsgCancelOrder{
@@ -255,7 +255,7 @@ func TestGenesisClientOrderIDContinuity(t *testing.T) {
 	again := place(alice.addr, 1, exchangev1.Side_SIDE_SELL, exchangev1.OrderType_ORDER_TYPE_LIMIT, exchangev1.TimeInForce_TIME_IN_FORCE_GTC, 1, 7, 4)
 	again.ClientOrderId = []byte("desk-1")
 	deliver(t, restored, alice.priv, again, false)
-	require.NoError(t, restored.Keeper.CheckInvariants(restored.NewContext(true)))
+	require.NoError(t, restored.Keeper.CheckInvariants(qctx(restored)))
 }
 
 func TestCorruptGenesisPanicsBeforeUse(t *testing.T) {
@@ -307,10 +307,10 @@ func feePath(t *testing.T, interrupt bool) feeSnap {
 		application = restartFromExport(t, application)
 	}
 	id := replayOrderID(t, buyer.addr, 1, 1)
-	resting, err := application.Keeper.GetOrder(application.NewContext(true), id)
+	resting, err := application.Keeper.GetOrder(qctx(application), id)
 	require.NoError(t, err)
 	deliver(t, application, seller3.priv, place(seller3.addr, 1, exchangev1.Side_SIDE_SELL, exchangev1.OrderType_ORDER_TYPE_LIMIT, exchangev1.TimeInForce_TIME_IN_FORCE_GTC, 1, 1, 1), true)
-	trade, err := application.Keeper.GetTrade(application.NewContext(true), 1, 3)
+	trade, err := application.Keeper.GetTrade(qctx(application), 1, 3)
 	require.NoError(t, err)
 	return feeSnap{
 		TakerGross:   resting.TakerGross,
@@ -322,7 +322,7 @@ func feePath(t *testing.T, interrupt bool) feeSnap {
 
 func mustOrder(t *testing.T, application *App, id domain.OrderID) exchangetypes.StoredOrder {
 	t.Helper()
-	order, err := application.Keeper.GetOrder(application.NewContext(true), id)
+	order, err := application.Keeper.GetOrder(qctx(application), id)
 	require.NoError(t, err)
 	return order
 }
@@ -341,20 +341,13 @@ func restartFromExport(t *testing.T, application *App) *App {
 		InitialHeight:   exported.Height,
 	})
 	require.NoError(t, err)
-	_, err = restored.FinalizeBlock(&abci.RequestFinalizeBlock{
-		Height: exported.Height,
-		Time:   time.Unix(1_700_000_000, 0).UTC(),
-	})
-	require.NoError(t, err)
-	_, err = restored.Commit()
-	require.NoError(t, err)
 	return restored
 }
 
 func advanceTo(t *testing.T, application *App, height int64) {
 	t.Helper()
 	for application.LastBlockHeight() < height {
-		next := application.LastBlockHeight() + 1
+		next := nextExecutionHeight(application)
 		_, err := application.FinalizeBlock(&abci.RequestFinalizeBlock{
 			Height: next,
 			Time:   time.Unix(1_700_000_000, 0).Add(time.Duration(next) * time.Second).UTC(),

@@ -240,6 +240,43 @@ func (c *Client) GetBatchCommitment(ctx context.Context, number uint64) (Commitm
 	return out, nil
 }
 
+func domainSide(v exchangev1.Side) (domain.Side, error) {
+	switch v {
+	case exchangev1.Side_SIDE_BUY:
+		return domain.SideBuy, nil
+	case exchangev1.Side_SIDE_SELL:
+		return domain.SideSell, nil
+	default:
+		return 0, fmt.Errorf("%w: side", ErrInvalidArgument)
+	}
+}
+
+func domainOrderType(v exchangev1.OrderType) (domain.OrderType, error) {
+	switch v {
+	case exchangev1.OrderType_ORDER_TYPE_LIMIT:
+		return domain.OrderTypeLimit, nil
+	case exchangev1.OrderType_ORDER_TYPE_MARKET:
+		return domain.OrderTypeMarket, nil
+	default:
+		return 0, fmt.Errorf("%w: order type", ErrInvalidArgument)
+	}
+}
+
+func domainTimeInForce(v exchangev1.TimeInForce) (domain.TimeInForce, error) {
+	switch v {
+	case exchangev1.TimeInForce_TIME_IN_FORCE_GTC:
+		return domain.TimeInForceGTC, nil
+	case exchangev1.TimeInForce_TIME_IN_FORCE_IOC:
+		return domain.TimeInForceIOC, nil
+	case exchangev1.TimeInForce_TIME_IN_FORCE_FOK:
+		return domain.TimeInForceFOK, nil
+	case exchangev1.TimeInForce_TIME_IN_FORCE_GTD:
+		return domain.TimeInForceGTD, nil
+	default:
+		return 0, fmt.Errorf("%w: time in force", ErrInvalidArgument)
+	}
+}
+
 func marketFrom(m *exchangev1.Market) Market {
 	return Market{
 		ID: m.Id, BaseAssetID: m.BaseAssetId, QuoteAssetID: m.QuoteAssetId,
@@ -259,9 +296,21 @@ func orderFrom(o *exchangev1.Order) (Order, error) {
 	if err != nil {
 		return Order{}, err
 	}
+	side, err := domainSide(o.Side)
+	if err != nil {
+		return Order{}, err
+	}
+	orderType, err := domainOrderType(o.OrderType)
+	if err != nil {
+		return Order{}, err
+	}
+	tif, err := domainTimeInForce(o.TimeInForce)
+	if err != nil {
+		return Order{}, err
+	}
 	return Order{
 		ID: id, Owner: o.Owner, MarketID: o.MarketId,
-		Side: domain.Side(o.Side), Type: domain.OrderType(o.OrderType), TimeInForce: domain.TimeInForce(o.TimeInForce),
+		Side: side, Type: orderType, TimeInForce: tif,
 		PriceTicks: o.PriceTicks, OriginalLots: o.OriginalLots, RemainingLots: o.RemainingLots,
 		Sequence: o.Sequence, ExpiryHeight: o.ExpiryHeight, CommandNonce: o.CommandNonce,
 	}, nil
@@ -277,8 +326,12 @@ func bookSide(in []*exchangev1.BookOrder) ([]BookOrder, error) {
 		if err != nil {
 			return nil, err
 		}
+		side, err := domainSide(b.Side)
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, BookOrder{
-			ID: id, Side: domain.Side(b.Side), PriceTicks: b.PriceTicks,
+			ID: id, Side: side, PriceTicks: b.PriceTicks,
 			RemainingLots: b.RemainingLots, Sequence: b.Sequence,
 		})
 	}

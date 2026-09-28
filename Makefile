@@ -1,4 +1,4 @@
-.PHONY: test test-race vet bench bench-matching bench-storage bench-batch bench-journal bench-count profile-cpu profile-heap check build
+.PHONY: test test-race vet bench bench-matching bench-storage bench-batch bench-journal bench-count profile-cpu profile-heap check build proto-gen proto-check
 
 build:
 	go build -o build/cosmos-orderbookd ./cmd/cosmos-orderbookd
@@ -42,3 +42,9 @@ profile-heap:
 	go test -bench=BenchmarkMakers1000 -benchmem -count=1 -run=^$$ -memprofile=mem.out ./benchmarks/
 
 check: test test-race vet
+
+proto-gen:
+	./scripts/proto-gen.sh
+
+proto-check:
+	./scripts/proto-gen.sh --check

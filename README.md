@@ -107,7 +107,7 @@ build/cosmos-orderbookd q exchange trades 1 --home .localnet
 
 `orderbook-sequencer` is off-chain. Validators still execute every command. `POST /v1/commands` returns `provisional: true` after the command is checked and written to the journal. That response does not mean the order executed or that the chain accepted it.
 
-The process reads the latest batch commitment and exchange revision, builds `MsgFinalizeBatch` from the oldest pending positions, and broadcasts it with the Cosmos SDK keyring. The key is not stored in a config file. Commands stay pending if the transaction fails. A nonce that the chain has already consumed is dropped on the next attempt. Finalized commands are not submitted again after a restart.
+The process reads the latest batch commitment and exchange revision, builds `MsgFinalizeBatch` from the oldest pending positions, and broadcasts it with the Cosmos SDK keyring. The key is not stored in a config file. Commands stay pending if the transaction fails. The chain can include a batch before the journal records finalization. The chain nonce still prevents that command from executing again, so a local receipt is not exactly-once. A nonce that the chain has already consumed is dropped on the next attempt. A permanently rejected command is quarantined and blocks later commands from that owner until a direct on-chain command advances the nonce. Finalized commands are not submitted again after a restart. Duplicate detection of finalized commands is limited to the recent `--max-seen` window.
 
 ```bash
 make build
@@ -120,7 +120,7 @@ In another shell, after the node is producing blocks:
 ./build/orderbook-sequencer --home .localnet --from submitter --chain-id orderbook-1
 ```
 
-`--node` defaults to `http://127.0.0.1:26657`. The same values can be set with `ORDERBOOK_NODE`, `ORDERBOOK_CHAIN_ID`, `ORDERBOOK_INSTANCE_ID`, `ORDERBOOK_JOURNAL`, `ORDERBOOK_LISTEN`, `ORDERBOOK_FROM`, `ORDERBOOK_KEYRING_BACKEND`, `ORDERBOOK_HOME`, `ORDERBOOK_MAX_BATCH`, `ORDERBOOK_BATCH_INTERVAL`, `ORDERBOOK_RETRY_INITIAL`, `ORDERBOOK_RETRY_MAX`, `ORDERBOOK_FEES`, and `ORDERBOOK_GAS`.
+`--node` defaults to `http://127.0.0.1:26657`. The same values can be set with `ORDERBOOK_NODE`, `ORDERBOOK_CHAIN_ID`, `ORDERBOOK_INSTANCE_ID`, `ORDERBOOK_JOURNAL`, `ORDERBOOK_LISTEN`, `ORDERBOOK_FROM`, `ORDERBOOK_KEYRING_BACKEND`, `ORDERBOOK_HOME`, `ORDERBOOK_MAX_BATCH`, `ORDERBOOK_BATCH_INTERVAL`, `ORDERBOOK_RETRY_INITIAL`, `ORDERBOOK_RETRY_MAX`, `ORDERBOOK_FEES`, and `ORDERBOOK_GAS`. Queue caps are `ORDERBOOK_MAX_OUTSTANDING` (default 10000), `ORDERBOOK_MAX_PER_OWNER` (default 256), `ORDERBOOK_MAX_PENDING_PAGE` (default 100), and `ORDERBOOK_MAX_SEEN` (default 10000). `GET /v1/pending` takes `limit` and `offset` and will not return more than the page cap.
 
 `POST /v1/commands` takes one JSON command. `chain_id`, `exchange_instance_id`, `owner`, and `client_order_id` are UTF-8 text. `pub_key`, `signature`, and `cancel.order_id` are hex. The signature is over the canonical batch-command bytes, not over this JSON. A client order id or instance id that is not valid UTF-8 is rejected here; this HTTP body does not round-trip arbitrary bytes. `GET /health` reports pending and in-flight counts, the latest observed batch, and chain connectivity. `GET /metrics` is Prometheus text. `GET /v1/pending` lists commands that are not yet finalized.
 
@@ -162,7 +162,7 @@ The client subscribes to CometBFT `NewBlock` and decodes events already emitted 
 
 Events from one transaction stay in the order the module emitted them. Expiration events from the block are included with that block. The client does not sort by wall clock.
 
-Delivery across reconnects is at-least-once. A reconnect can show the same event again. `EventID` is the block height, the transaction hash when the event came from a transaction, and the event index. That is enough to deduplicate. The stream is not exactly-once, and it is not protocol state. A stalled subscriber is closed with `ErrSlowConsumer` instead of dropping events or blocking the node.
+Delivery across reconnects is at-least-once. A reconnect can show the same event again. Emitted events do not go backwards in chain height. `EventID` is the block height, the transaction hash when the event came from a transaction, and the event index. That is enough to deduplicate. The stream is not exactly-once, and it is not protocol state. A stalled subscriber is closed with `ErrSlowConsumer` instead of dropping events or blocking the node. `https://` gRPC endpoints use TLS and check the server name. `http://` and `host:port` are plaintext.
 
 ## Tests
 
@@ -172,7 +172,7 @@ go test -race ./...
 go vet ./...
 ```
 
-`make check` runs all three. Fuzz targets are included; `go test` executes their seed corpus. A longer run is `go test -fuzz=FuzzMatchReplay -fuzztime=10s ./pkg/matching`.
+`make check` runs all three. `make proto-gen` regenerates the tracked protobuf files with `protoc` and `protoc-gen-gocosmos` v1.7.2 (`plugins=grpc`). `protoc-gen-go` and `protoc-gen-go-grpc` are not used. `make proto-check` regenerates into a temporary directory and fails if the tracked files differ. Fuzz targets are included; `go test` executes their seed corpus. A longer run is `go test -fuzz=FuzzMatchReplay -fuzztime=10s ./pkg/matching`.
 
 The client end-to-end test starts an in-process chain. It does not need a manually started node.
 

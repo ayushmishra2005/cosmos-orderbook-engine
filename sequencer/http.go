@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -63,7 +64,8 @@ type healthResponse struct {
 }
 
 type pendingResponse struct {
-	Commands []Receipt `json:"commands"`
+	Commands   []Receipt `json:"commands"`
+	NextOffset int       `json:"next_offset,omitempty"`
 }
 
 // Handler is the admission HTTP API.
@@ -105,8 +107,11 @@ func (s *Service) health() healthResponse {
 	}
 }
 
-func (s *Service) handlePending(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, pendingResponse{Commands: s.Pending()})
+func (s *Service) handlePending(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	page, next := s.PendingPage(limit, offset)
+	writeJSON(w, http.StatusOK, pendingResponse{Commands: page, NextOffset: next})
 }
 
 func (s *Service) handleCommand(w http.ResponseWriter, r *http.Request) {
@@ -150,6 +155,8 @@ func statusFor(err error) int {
 		return http.StatusServiceUnavailable
 	case errors.Is(err, ErrDuplicate):
 		return http.StatusConflict
+	case errors.Is(err, ErrQueueFull), errors.Is(err, ErrOwnerQueue):
+		return http.StatusTooManyRequests
 	default:
 		return http.StatusBadRequest
 	}

@@ -33,7 +33,7 @@ baseAmount  = quantityLots * baseLotSize
 quoteAmount = quantityLots * priceTicks * quoteAtomsPerTickPerLot
 ```
 
-No `float32` or `float64` on the match or settlement path. Addition, subtraction, and multiplication are checked. Overflow and underflow return errors and do not wrap. A zero lot size or a zero quote-atoms-per-tick is an error. A balance is accepted only when `available + locked` fits in `uint64`, so a later release cannot overflow.
+No `float32` or `float64` on the match or settlement path. Addition, subtraction, and multiplication are checked. Overflow and underflow return errors and do not wrap. A zero lot size or a zero quote-atoms-per-tick is an error. One account and one asset are accepted only when `available + locked` fits in `uint64`, so a later release cannot overflow. The sum of many accounts in that asset may exceed `uint64`.
 
 Fees use parts per million:
 
@@ -88,7 +88,7 @@ The first finalized batch number is 1. The next number is the previous number pl
 
 `BatchID` is SHA-256 over `cosmos-orderbook/batch-id/v1`, the batch number, the expected revision, and the ordered signed commands. It identifies that batch. It is not an exchange state root.
 
-`ResultsHash` is SHA-256 over `cosmos-orderbook/batch-results/v1` and the ordered command results. Each result is the command index, type, owner, order ID, final status, remaining quantity, and the ordered trade sequences. Results stay in command order.
+`ResultsHash` is SHA-256 over `cosmos-orderbook/batch-results/v1` and the ordered command results. Each result is the command index, type, owner, order ID, final status, remaining quantity, and the ordered trade sequences. A trade reference is the market and the trade sequence of a committed trade. The digest does not encode the trade's price, quantity, or fees. Results stay in command order.
 
 `BatchCommitment` is SHA-256 over `cosmos-orderbook/batch-commitment/v1`, version 1, chain ID, exchange instance, batch number, `BatchID`, the previous commitment, execution height, pre and post exchange revisions, and `ResultsHash`. The height is the consensus block height. Batch 1's previous commitment is 32 zero bytes. A later batch must name the current head. The head changes only after every command succeeds.
 
@@ -100,7 +100,11 @@ The first finalized batch number is 1. The next number is the previous number pl
 
 The batch loop reads the current batch head and exchange revision, freezes the oldest eligible pending commands, and submits `MsgFinalizeBatch` through a normal Cosmos transaction. The submitter key stays in the SDK keyring. A rejected batch returns its commands to pending, except a nonce the chain has already passed, which is dropped, and a command the validator permanently rejects, which is quarantined. A quarantined nonce blocks later commands from that owner. Commands from other owners stay in their relative journal order and can still be submitted. Finalized and quarantined commands are not queued again after a restart.
 
-The journal is not chain state. It is not an exchange state root.
+The journal is not chain state. It is not an exchange state root. The local format is `OBJ2`: each frame is version, position, status, and the canonical command, covered by a CRC-32. A pre-v0.1 `OBJ1` file is rejected. A bit flip in the status or the position fails closed and is not replayed.
+
+Chain inclusion can happen before the journal records finalization. The chain nonce still prevents that command from executing again. A local receipt is not exactly-once. A quarantined nonce blocks later commands from that owner until a direct on-chain command advances the chain nonce; the next refresh then treats the quarantined nonce as stale.
+
+Admission is bounded. The default caps are 10,000 pending plus in-flight commands, 256 outstanding commands for one owner (including quarantined commands), and 100 commands per `/v1/pending` page. Finalized command ids are kept for duplicate detection only up to `--max-seen` (default 10,000). A command outside that window is still rejected when its nonce is already consumed on chain. It is not executed again.
 
 Admission metrics, batch timings, and the retry delay are local to the sequencer process. A failed batch is not broadcast again until that delay elapses. The delay doubles up to a cap and resets after a batch is included. It does not change the relative order of eligible commands. An underfunded order stays pending; a later deposit can make it valid. A permanently rejected command does not.
 
@@ -110,7 +114,7 @@ Admission metrics, batch timings, and the retry delay are local to the sequencer
 
 `CheckInvariants` and `CheckCustody` read the store and return an error. They do not write, and they do not repair a bad key. `StateDigestForTest` and `SnapshotDigest` hash KV pairs in key order so tests can compare validators. The digest is not a batch commitment, a state root, or a proof.
 
-A fee-collector balance is one of the internal balances. Custody is the sum of available and locked atoms, including that balance. The exchange module account's bank balance must cover the sum. It may be larger. Trades do not move bank coins.
+A fee-collector balance is one of the internal balances and is counted once. Custody is per denomination. For one asset, liability is the sum of every account's available and locked atoms, including the fee collector. That sum may exceed `MaxUint64` and is compared to the module bank balance with the SDK integer type. Different denoms are not added together. One owner and one asset still require `available + locked` to fit in `uint64`. The module account's bank balance for that denom must cover the liability. It may be larger. Trades do not move bank coins.
 
 `scripts/localnet4.sh` runs four CometBFT validators on one genesis. Each validator executes the same transactions. Wall-clock samples used by metrics are not inputs to that execution.
 
@@ -118,7 +122,7 @@ A fee-collector balance is one of the internal balances. Custody is the sum of a
 
 `cosmos-orderbookd` can run as one validator or as the four-validator local network. Deposits move bank coins from the user to the exchange module account and credit available balance. Withdrawals do the reverse and cannot spend locked balance. Both run in one cache, so a bank failure does not leave the internal ledger changed. Trades move atoms only inside the exchange ledger. The module account's bank balance for each registered denom must cover the sum of available and locked balances.
 
-Genesis exports assets, markets, available and locked balances, resting orders, command nonces, per-market order and trade sequences, and the exchange revision. Fee grosses and any active client order id are fields on the order. Ask, bid, owner, client, and expiration indexes are not exported; `InitGenesis` rebuilds them from the orders with the same key encoders. A denom index is rebuilt with each asset. Locked atoms must equal the reserves of the active orders for that owner and asset. Bank custody must already cover available plus locked balances, including the fee collector, without minting coins to make the file valid.
+Export returns the next execution height, one above the committed height already included in the state. The SDK stores that value as genesis `initial_height`, and the next `FinalizeBlock` is that height. Zero-height export is rejected. Genesis exports assets, markets, available and locked balances, resting orders, command nonces, per-market order and trade sequences, and the exchange revision. Fee grosses and any active client order id are fields on the order. Ask, bid, owner, client, and expiration indexes are not exported; `InitGenesis` rebuilds them from the orders with the same key encoders. A denom index is rebuilt with each asset. Locked atoms must equal the reserves of the active orders for that owner and asset. Bank custody must already cover available plus locked balances, including the fee collector, without minting coins to make the file valid.
 
 Trade records are exported as well. They do not change later matching. They are included because the trade-sequence check requires a contiguous history `1..N` and a counter equal to `N`. The next trade uses `N+1`.
 
@@ -128,7 +132,7 @@ Trade records are exported as well. They do not change later matching. They are 
 
 `client/go` is an external integration layer. It calls the existing gRPC query services and broadcasts ordinary Cosmos transactions. It does not read the KV store and it does not assign order IDs. A market order still carries the caller's worst acceptable tick. Owner-signed sequencer commands use `canonical.CommandSignBytes`, the same bytes `x/batch` verifies. They are not JSON signatures.
 
-Streams subscribe to CometBFT `NewBlock` and decode the events `x/exchange` and `x/batch` already emit. The stream is not authoritative. A disconnect does not affect matching, settlement, ordering, batch execution, or commitments. Reconnect uses a bounded delay and may deliver an event again. Each event carries height, transaction hash when it has one, and the event index inside that transaction or block. Consumers can deduplicate. Delivery is at-least-once, not exactly-once.
+Streams subscribe to CometBFT `NewBlock` and decode the events `x/exchange` and `x/batch` already emit. The stream is not authoritative. A disconnect does not affect matching, settlement, ordering, batch execution, or commitments. Reconnect uses a bounded delay. Delivery across reconnects is at-least-once. The same event can be delivered again. Emitted committed events are nondecreasing by chain height. The stream is not exactly-once. A subscription does not start when the chain tip cannot be read. Each event carries height, transaction hash when it has one, and the event index inside that transaction or block. Consumers can deduplicate.
 
 A subscriber that does not keep up is closed with a slow-consumer error. The node is not blocked on that subscriber. Filters are market ID and event type.
 

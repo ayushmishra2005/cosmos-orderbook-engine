@@ -2,6 +2,7 @@ package orderbook
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 
 	rpchttp "github.com/cometbft/cometbft/rpc/client/http"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"cosmossdk.io/log/v2"
@@ -92,7 +94,7 @@ func NewClient(cfg Config) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	grpcTarget, err := normalizeGRPC(cfg.GRPCEndpoint)
+	grpcTarget, grpcCreds, err := grpcCredentials(cfg.GRPCEndpoint)
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +117,7 @@ func NewClient(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("%w: %v", ErrRPCUnavailable, statusErr)
 	}
 	conn, err := grpc.NewClient(grpcTarget,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(grpcCreds),
 		grpc.WithDefaultCallOptions(grpc.ForceCodec(codec.NewProtoCodec(enc.InterfaceRegistry).GRPCCodec())),
 	)
 	if err != nil {
@@ -253,20 +255,36 @@ func normalizeRPC(raw string) (httpURL, wsURL string, err error) {
 	return httpURL, u.String(), nil
 }
 
-func normalizeGRPC(raw string) (string, error) {
+func grpcCredentials(raw string) (string, credentials.TransportCredentials, error) {
 	raw = strings.TrimSpace(raw)
-	raw = strings.TrimPrefix(raw, "tcp://")
-	raw = strings.TrimPrefix(raw, "http://")
-	raw = strings.TrimPrefix(raw, "https://")
-	if raw == "" || strings.Contains(raw, "://") {
-		return "", fmt.Errorf("%w: grpc endpoint", ErrInvalidArgument)
+	tlsEndpoint := false
+	switch {
+	case strings.HasPrefix(raw, "https://"):
+		tlsEndpoint = true
+		raw = strings.TrimPrefix(raw, "https://")
+	case strings.HasPrefix(raw, "http://"):
+		raw = strings.TrimPrefix(raw, "http://")
+	case strings.HasPrefix(raw, "tcp://"):
+		raw = strings.TrimPrefix(raw, "tcp://")
+	case strings.Contains(raw, "://"):
+		return "", nil, fmt.Errorf("%w: grpc endpoint", ErrInvalidArgument)
+	}
+	if raw == "" {
+		return "", nil, fmt.Errorf("%w: grpc endpoint", ErrInvalidArgument)
 	}
 	host, port, err := net.SplitHostPort(raw)
 	if err != nil {
-		return "", fmt.Errorf("%w: grpc endpoint", ErrInvalidArgument)
+		return "", nil, fmt.Errorf("%w: grpc endpoint", ErrInvalidArgument)
 	}
 	if host == "0.0.0.0" {
 		host = "127.0.0.1"
 	}
-	return net.JoinHostPort(host, port), nil
+	target := net.JoinHostPort(host, port)
+	if tlsEndpoint {
+		return target, credentials.NewTLS(&tls.Config{
+			ServerName: host,
+			MinVersion: tls.VersionTLS12,
+		}), nil
+	}
+	return target, insecure.NewCredentials(), nil
 }

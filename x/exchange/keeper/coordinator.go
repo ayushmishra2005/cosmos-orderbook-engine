@@ -8,7 +8,6 @@ import (
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	"github.com/ayushmishra2005/cosmos-orderbook-engine/internal/telemetry"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/arithmetic"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/canonical"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/domain"
@@ -49,7 +48,6 @@ func (k Keeper) PlaceOrder(ctx context.Context, cmd types.PlaceOrderCommand) (ty
 	if err != nil {
 		return types.PlaceResult{}, err
 	}
-	telemetry.RecordPlace(stats.fills, stats.match, stats.settle)
 	return result, nil
 }
 
@@ -333,7 +331,6 @@ func (k Keeper) CancelOrder(ctx context.Context, cmd types.CancelOrderCommand) (
 	if err != nil {
 		return types.CancelResult{}, err
 	}
-	telemetry.RecordCancel()
 	return result, nil
 }
 

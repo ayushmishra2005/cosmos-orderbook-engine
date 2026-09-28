@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 
-	sdkmath "cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/arithmetic"
@@ -91,92 +90,45 @@ func (k Keeper) CheckInvariants(ctx context.Context) error {
 	return k.checkNotCrossed(ctx, markets, height)
 }
 
-// CheckCustody checks the internal liability identity and, when a bank keeper
-// is set, that module custody covers it.
-//
-// Fee-collector balances are excluded from the other owners' sums and added
-// once. Bank custody may exceed that liability: genesis accepts a module
-// balance greater than the internal sum.
+// CheckCustody checks per-asset liabilities against module bank balances.
+// Each owner+asset pair must satisfy available+locked <= MaxUint64.
+// The per-asset sum may exceed MaxUint64 and is not mixed with other denoms.
+// The fee collector is one balance row and is counted once.
 func (k Keeper) CheckCustody(ctx context.Context) error {
-	var available, locked, collector uint64
 	err := k.iteratePrefix(ctx, []byte{canonical.PrefixBalance}, func(key, value []byte) (bool, error) {
-		owner, _, err := canonical.DecodeBalanceKey(key)
-		if err != nil {
+		if _, _, err := canonical.DecodeBalanceKey(key); err != nil {
 			return false, corrupt("balance key")
 		}
 		bal, err := types.DecodeBalance(value)
 		if err != nil {
 			return false, err
 		}
-		if err := requireNonNegative(bal); err != nil {
+		if err := types.ValidateBalanceCapacity(bal.Available, bal.Locked); err != nil {
 			return false, err
-		}
-		if bytes.Equal(owner, types.FeeCollectorOwner) {
-			sum, err := arithmetic.Add(bal.Available, bal.Locked)
-			if err != nil {
-				return false, err
-			}
-			collector, err = arithmetic.Add(collector, sum)
-			return false, err
-		}
-		available, err = arithmetic.Add(available, bal.Available)
-		if err != nil {
-			return false, err
-		}
-		locked, err = arithmetic.Add(locked, bal.Locked)
-		return false, err
-	})
-	if err != nil {
-		return err
-	}
-	internal, err := arithmetic.Add(available, locked)
-	if err != nil {
-		return err
-	}
-	liability, err := arithmetic.Add(internal, collector)
-	if err != nil {
-		return err
-	}
-	again, err := arithmetic.Add(available, locked)
-	if err != nil {
-		return err
-	}
-	again, err = arithmetic.Add(again, collector)
-	if err != nil || again != liability {
-		return corrupt("liability identity")
-	}
-	if k.bank == nil {
-		return nil
-	}
-	var summed uint64
-	var assets int
-	err = k.iteratePrefix(ctx, []byte{canonical.PrefixAsset}, func(_, value []byte) (bool, error) {
-		asset, err := types.DecodeAsset(value)
-		if err != nil {
-			return false, err
-		}
-		assets++
-		sum, err := k.SumLiabilities(ctx, asset.ID)
-		if err != nil {
-			return false, err
-		}
-		summed, err = arithmetic.Add(summed, sum)
-		if err != nil {
-			return false, err
-		}
-		coin := k.bank.GetBalance(ctx, ModuleAddress(), asset.Denom)
-		if !coin.Amount.IsUint64() || coin.Amount.LT(sdkmath.NewIntFromUint64(sum)) {
-			return false, types.ErrUnbacked
 		}
 		return false, nil
 	})
 	if err != nil {
 		return err
 	}
-	if assets > 0 && summed != liability {
-		return corrupt("liability does not match per-asset sums")
+	if k.bank == nil {
+		return nil
 	}
-	return nil
+	return k.iteratePrefix(ctx, []byte{canonical.PrefixAsset}, func(_, value []byte) (bool, error) {
+		asset, err := types.DecodeAsset(value)
+		if err != nil {
+			return false, err
+		}
+		sum, err := k.SumLiabilities(ctx, asset.ID)
+		if err != nil {
+			return false, err
+		}
+		coin := k.bank.GetBalance(ctx, ModuleAddress(), asset.Denom)
+		if coin.Amount.LT(sum) {
+			return false, types.ErrUnbacked
+		}
+		return false, nil
+	})
 }
 
 func requireNonNegative(bal types.Balance) error {

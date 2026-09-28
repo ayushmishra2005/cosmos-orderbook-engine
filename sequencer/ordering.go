@@ -1,7 +1,6 @@
 package sequencer
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"math"
@@ -50,6 +49,12 @@ func (s *Service) admit(ctx context.Context, cmd canonical.Command) (Receipt, er
 	if cmd.Nonce < chainNext {
 		return Receipt{}, ErrStaleNonce
 	}
+	if len(s.pending)+len(s.inflight) >= s.cfg.MaxOutstanding {
+		return Receipt{}, ErrQueueFull
+	}
+	if s.ownerLoad[string(cmd.Owner)] >= s.cfg.MaxPerOwner {
+		return Receipt{}, ErrOwnerQueue
+	}
 	expected, err := s.expectedNonce(cmd.Owner, chainNext)
 	if err != nil {
 		return Receipt{}, err
@@ -68,6 +73,8 @@ func (s *Service) admit(ctx context.Context, cmd canonical.Command) (Receipt, er
 	}
 	it := &item{position: pos, cmd: cmd, encoded: encoded, id: id}
 	s.seen[id] = struct{}{}
+	s.track(it)
+	s.ownerLoad[string(cmd.Owner)]++
 	s.pending = append(s.pending, it)
 	s.byPos[pos] = StatusPending
 	s.syncGauges()
@@ -75,30 +82,36 @@ func (s *Service) admit(ctx context.Context, cmd canonical.Command) (Receipt, er
 }
 
 func (s *Service) expectedNonce(owner []byte, chainNext uint64) (uint64, error) {
+	set := s.outstanding[string(owner)]
+	s.nonceLookups = len(set)
+	if s.nonceLookups == 0 {
+		s.nonceLookups = 1
+	}
 	expected := chainNext
-	bump := func(n uint64) error {
-		if n < expected {
-			return nil
+	var high uint64
+	var have bool
+	for n := range set {
+		if n < chainNext {
+			continue
 		}
-		if n == math.MaxUint64 {
-			return ErrNonce
-		}
-		expected = n + 1
-		return nil
-	}
-	for _, it := range s.pending {
-		if bytes.Equal(it.cmd.Owner, owner) {
-			if err := bump(it.cmd.Nonce); err != nil {
-				return 0, err
-			}
+		if !have || n > high {
+			high = n
+			have = true
 		}
 	}
-	for _, it := range s.inflight {
-		if bytes.Equal(it.cmd.Owner, owner) {
-			if err := bump(it.cmd.Nonce); err != nil {
-				return 0, err
-			}
-		}
+	if !have {
+		return expected, nil
 	}
-	return expected, nil
+	if high == math.MaxUint64 {
+		return 0, ErrNonce
+	}
+	return high + 1, nil
+}
+
+// LastNonceLookups is the number of this owner's queued nonces examined
+// by the previous admission. It does not grow with other owners.
+func (s *Service) LastNonceLookups() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.nonceLookups
 }

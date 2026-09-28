@@ -22,4 +22,6 @@ var (
 	ErrBatchRejected      = errors.New("sequencer: batch transaction rejected")
 	ErrEmptyBatch         = errors.New("sequencer: no pending commands")
 	ErrHead               = errors.New("sequencer: invalid chain batch head")
+	ErrQueueFull          = errors.New("sequencer: queue is full")
+	ErrOwnerQueue         = errors.New("sequencer: owner queue is full")
 )

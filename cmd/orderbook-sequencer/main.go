@@ -43,6 +43,10 @@ func run(args []string) error {
 	retryInitial := fs.Duration("retry-initial", envDuration("ORDERBOOK_RETRY_INITIAL", time.Second), "initial delay after a failed batch submission")
 	retryMax := fs.Duration("retry-max", envDuration("ORDERBOOK_RETRY_MAX", 30*time.Second), "maximum delay after a failed batch submission")
 	maxBytes := fs.Int("max-command-bytes", envInt("ORDERBOOK_MAX_COMMAND_BYTES", 8192), "maximum encoded command size")
+	maxOutstanding := fs.Int("max-outstanding", envInt("ORDERBOOK_MAX_OUTSTANDING", 10_000), "maximum pending and in-flight commands")
+	maxPerOwner := fs.Int("max-per-owner", envInt("ORDERBOOK_MAX_PER_OWNER", 256), "maximum outstanding commands for one owner")
+	maxPage := fs.Int("max-pending-page", envInt("ORDERBOOK_MAX_PENDING_PAGE", 100), "maximum /v1/pending page size")
+	maxSeen := fs.Int("max-seen", envInt("ORDERBOOK_MAX_SEEN", 10_000), "finalized command ids retained for duplicate detection")
 	fees := fs.String("fees", env("ORDERBOOK_FEES", "1stake"), "submitter transaction fee")
 	gas := fs.Uint64("gas", envUint("ORDERBOOK_GAS", 2_000_000), "submitter transaction gas limit")
 	if err := fs.Parse(args); err != nil {
@@ -81,6 +85,10 @@ func run(args []string) error {
 		JournalPath:     *journal,
 		MaxCommandBytes: *maxBytes,
 		MaxBatch:        *maxBatch,
+		MaxOutstanding:  *maxOutstanding,
+		MaxPerOwner:     *maxPerOwner,
+		MaxPendingPage:  *maxPage,
+		MaxSeen:         *maxSeen,
 		BatchInterval:   *interval,
 		RetryInitial:    *retryInitial,
 		RetryMax:        *retryMax,

@@ -3,6 +3,7 @@ package orderbook
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -134,6 +135,19 @@ func (c *Client) subscribe(ctx context.Context, f streamFilter) (*Subscription, 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if c.tip == nil {
+		return nil, fmt.Errorf("%w: chain tip", ErrRPCUnavailable)
+	}
+	tip, err := c.tip(ctx)
+	if err != nil || tip <= 0 {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if err == nil {
+			err = errors.New("missing chain tip")
+		}
+		return nil, fmt.Errorf("%w: %v", ErrRPCUnavailable, err)
+	}
 	conn, err := c.dialLive(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -142,23 +156,25 @@ func (c *Client) subscribe(ctx context.Context, f streamFilter) (*Subscription, 
 		return nil, errors.Join(ErrRPCUnavailable, err)
 	}
 	sub := newSubscription(c.buffer)
-	go c.serve(ctx, sub, conn, f)
+	go c.serve(ctx, sub, conn, f, tip)
 	return sub.pub, nil
 }
 
-func (c *Client) serve(ctx context.Context, sub *subscription, conn liveConn, f streamFilter) {
-	defer conn.Close()
-	// Seed the replay cursor from the height at subscribe time. A disconnect
-	// before any decoded event still has a block to replay from.
-	var last int64
-	if c.tip != nil {
-		if tip, err := c.tip(ctx); err == nil && tip > 0 {
-			last = tip
+func (c *Client) serve(ctx context.Context, sub *subscription, conn liveConn, f streamFilter, cursor int64) {
+	current := conn
+	var stopReader func()
+	defer func() {
+		if stopReader != nil {
+			stopReader()
 		}
-	}
+		current.Close()
+	}()
+	last := cursor
 	delay := c.delay
 	connected := true
-	frames, faults := readFrames(ctx, conn, c.buffer)
+	var frames <-chan []byte
+	var faults <-chan error
+	frames, faults, stopReader = readFrames(ctx, current, c.buffer)
 	for {
 		if ctx.Err() != nil {
 			sub.stop(ctx.Err())
@@ -178,26 +194,40 @@ func (c *Client) serve(ctx context.Context, sub *subscription, conn liveConn, f 
 				}
 				continue
 			}
-			conn.Close()
-			conn = next
-			frames, faults = readFrames(ctx, conn, c.buffer)
+			if stopReader != nil {
+				stopReader()
+			}
+			current.Close()
+			current = next
+			if err := c.replay(ctx, sub, f, last, &last); err != nil {
+				if errors.Is(err, ErrSlowConsumer) || ctx.Err() != nil {
+					if ctx.Err() != nil {
+						sub.stop(ctx.Err())
+					} else {
+						sub.stop(err)
+					}
+					return
+				}
+				current.Close()
+				connected = false
+				continue
+			}
+			frames, faults, stopReader = readFrames(ctx, current, c.buffer)
 			connected = true
 			delay = c.delay
-			if last > 0 {
-				if err := c.replay(ctx, sub, f, last, &last); err != nil {
-					if errors.Is(err, ErrSlowConsumer) || ctx.Err() != nil {
-						if ctx.Err() != nil {
-							sub.stop(ctx.Err())
-						} else {
-							sub.stop(err)
-						}
-						return
-					}
-					conn.Close()
-					connected = false
-					continue
-				}
+		}
+		// A frame already read is applied before a disconnect so a reconnect
+		// cannot emit an older height ahead of it.
+		select {
+		case msg, ok := <-frames:
+			if stop, err := c.onFrame(sub, f, msg, ok, faults, &last, &connected, &stopReader, &current); err != nil {
+				sub.stop(err)
+				return
+			} else if stop {
+				continue
 			}
+			continue
+		default:
 		}
 		select {
 		case <-ctx.Done():
@@ -212,33 +242,60 @@ func (c *Client) serve(ctx context.Context, sub *subscription, conn liveConn, f 
 				sub.stop(ErrSlowConsumer)
 				return
 			}
-			conn.Close()
+			if stopReader != nil {
+				stopReader()
+				stopReader = nil
+			}
+			current.Close()
 			connected = false
 		case msg, ok := <-frames:
-			if !ok {
-				conn.Close()
-				connected = false
-				continue
-			}
-			decode := c.decode
-			if decode == nil {
-				decode = decodeMessage
-			}
-			events, err := decode(msg)
-			if err != nil {
-				continue
-			}
-			for _, ev := range events {
-				if ev.ID.Height > last {
-					last = ev.ID.Height
-				}
-			}
-			if err := sub.emit(events, f); err != nil {
+			if _, err := c.onFrame(sub, f, msg, ok, faults, &last, &connected, &stopReader, &current); err != nil {
 				sub.stop(err)
 				return
 			}
 		}
 	}
+}
+
+func (c *Client) onFrame(sub *subscription, f streamFilter, msg []byte, ok bool, faults <-chan error, last *int64, connected *bool, stopReader *func(), current *liveConn) (bool, error) {
+	if !ok {
+		select {
+		case err := <-faults:
+			if errors.Is(err, ErrSlowConsumer) {
+				return false, ErrSlowConsumer
+			}
+		default:
+		}
+		if *stopReader != nil {
+			(*stopReader)()
+			*stopReader = nil
+		}
+		(*current).Close()
+		*connected = false
+		return true, nil
+	}
+	decode := c.decode
+	if decode == nil {
+		decode = decodeMessage
+	}
+	events, err := decode(msg)
+	if err != nil {
+		return false, nil
+	}
+	kept := events[:0]
+	for _, ev := range events {
+		if *last > 0 && ev.ID.Height < *last {
+			continue
+		}
+		if ev.ID.Height > *last {
+			*last = ev.ID.Height
+		}
+		kept = append(kept, ev)
+	}
+	if err := sub.emit(kept, f); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 func (c *Client) replay(ctx context.Context, sub *subscription, f streamFilter, from int64, last *int64) error {
@@ -269,28 +326,39 @@ func (c *Client) replay(ctx context.Context, sub *subscription, f streamFilter, 
 	return nil
 }
 
-func readFrames(ctx context.Context, conn liveConn, buffer int) (<-chan []byte, <-chan error) {
+func readFrames(ctx context.Context, conn liveConn, buffer int) (<-chan []byte, <-chan error, func()) {
+	readerCtx, cancel := context.WithCancel(ctx)
 	frames := make(chan []byte, buffer)
 	faults := make(chan error, 1)
 	go func() {
+		defer close(frames)
 		for {
-			msg, err := conn.Recv(ctx)
+			msg, err := conn.Recv(readerCtx)
 			if err != nil {
-				faults <- err
+				select {
+				case faults <- err:
+				case <-readerCtx.Done():
+				}
 				return
 			}
 			select {
 			case frames <- msg:
-			case <-ctx.Done():
-				faults <- ctx.Err()
+			case <-readerCtx.Done():
+				select {
+				case faults <- readerCtx.Err():
+				default:
+				}
 				return
 			default:
-				faults <- ErrSlowConsumer
+				select {
+				case faults <- ErrSlowConsumer:
+				default:
+				}
 				return
 			}
 		}
 	}()
-	return frames, faults
+	return frames, faults, cancel
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {

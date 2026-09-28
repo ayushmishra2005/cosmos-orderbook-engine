@@ -197,14 +197,13 @@ func checkPlace(market uint64, side domain.Side, tif domain.TimeInForce, qty, pr
 }
 
 func atomCoin(denom string, amount uint64) (sdk.Coin, error) {
-	if amount == 0 || denom == "" {
+	if amount == 0 {
 		return sdk.Coin{}, fmt.Errorf("%w: amount", ErrInvalidArgument)
 	}
-	coin := sdk.NewCoin(denom, sdkmath.NewIntFromUint64(amount))
-	if err := coin.Validate(); err != nil {
+	if err := sdk.ValidateDenom(denom); err != nil {
 		return sdk.Coin{}, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
 	}
-	return coin, nil
+	return sdk.NewCoin(denom, sdkmath.NewIntFromUint64(amount)), nil
 }
 
 func (c *Client) broadcast(ctx context.Context, signer Signer, msg sdk.Msg) (TxResult, error) {

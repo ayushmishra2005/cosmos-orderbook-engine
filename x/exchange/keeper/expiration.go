@@ -29,7 +29,9 @@ func (k Keeper) ExpireOrders(ctx context.Context, height uint64, max int) (int, 
 	if err != nil {
 		return 0, err
 	}
-	telemetry.RecordExpired(n)
+	if committedBlock(ctx) {
+		telemetry.RecordExpired(n)
+	}
 	return n, nil
 }
 

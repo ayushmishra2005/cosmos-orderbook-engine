@@ -11,7 +11,9 @@ import (
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
+	io "io"
 	math "math"
+	math_bits "math/bits"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -26,10 +28,7 @@ var _ = math.Inf
 const _ = proto.GoGoProtoPackageIsVersion3 // please upgrade the proto package
 
 type QueryBatchRequest struct {
-	BatchNumber          uint64   `protobuf:"varint,1,opt,name=batch_number,json=batchNumber,proto3" json:"batch_number,omitempty"`
-	XXX_NoUnkeyedLiteral struct{} `json:"-"`
-	XXX_unrecognized     []byte   `json:"-"`
-	XXX_sizecache        int32    `json:"-"`
+	BatchNumber uint64 `protobuf:"varint,1,opt,name=batch_number,json=batchNumber,proto3" json:"batch_number,omitempty"`
 }
 
 func (m *QueryBatchRequest) Reset()         { *m = QueryBatchRequest{} }
@@ -39,16 +38,25 @@ func (*QueryBatchRequest) Descriptor() ([]byte, []int) {
 	return fileDescriptor_d8bb44cf3b31d553, []int{0}
 }
 func (m *QueryBatchRequest) XXX_Unmarshal(b []byte) error {
-	return xxx_messageInfo_QueryBatchRequest.Unmarshal(m, b)
+	return m.Unmarshal(b)
 }
 func (m *QueryBatchRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	return xxx_messageInfo_QueryBatchRequest.Marshal(b, m, deterministic)
+	if deterministic {
+		return xxx_messageInfo_QueryBatchRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
 }
 func (m *QueryBatchRequest) XXX_Merge(src proto.Message) {
 	xxx_messageInfo_QueryBatchRequest.Merge(m, src)
 }
 func (m *QueryBatchRequest) XXX_Size() int {
-	return xxx_messageInfo_QueryBatchRequest.Size(m)
+	return m.Size()
 }
 func (m *QueryBatchRequest) XXX_DiscardUnknown() {
 	xxx_messageInfo_QueryBatchRequest.DiscardUnknown(m)
@@ -64,10 +72,7 @@ func (m *QueryBatchRequest) GetBatchNumber() uint64 {
 }
 
 type QueryBatchResponse struct {
-	Batch                *Batch   `protobuf:"bytes,1,opt,name=batch,proto3" json:"batch,omitempty"`
-	XXX_NoUnkeyedLiteral struct{} `json:"-"`
-	XXX_unrecognized     []byte   `json:"-"`
-	XXX_sizecache        int32    `json:"-"`
+	Batch *Batch `protobuf:"bytes,1,opt,name=batch,proto3" json:"batch,omitempty"`
 }
 
 func (m *QueryBatchResponse) Reset()         { *m = QueryBatchResponse{} }
@@ -77,16 +82,25 @@ func (*QueryBatchResponse) Descriptor() ([]byte, []int) {
 	return fileDescriptor_d8bb44cf3b31d553, []int{1}
 }
 func (m *QueryBatchResponse) XXX_Unmarshal(b []byte) error {
-	return xxx_messageInfo_QueryBatchResponse.Unmarshal(m, b)
+	return m.Unmarshal(b)
 }
 func (m *QueryBatchResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	return xxx_messageInfo_QueryBatchResponse.Marshal(b, m, deterministic)
+	if deterministic {
+		return xxx_messageInfo_QueryBatchResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
 }
 func (m *QueryBatchResponse) XXX_Merge(src proto.Message) {
 	xxx_messageInfo_QueryBatchResponse.Merge(m, src)
 }
 func (m *QueryBatchResponse) XXX_Size() int {
-	return xxx_messageInfo_QueryBatchResponse.Size(m)
+	return m.Size()
 }
 func (m *QueryBatchResponse) XXX_DiscardUnknown() {
 	xxx_messageInfo_QueryBatchResponse.DiscardUnknown(m)
@@ -102,9 +116,6 @@ func (m *QueryBatchResponse) GetBatch() *Batch {
 }
 
 type QueryLatestBatchRequest struct {
-	XXX_NoUnkeyedLiteral struct{} `json:"-"`
-	XXX_unrecognized     []byte   `json:"-"`
-	XXX_sizecache        int32    `json:"-"`
 }
 
 func (m *QueryLatestBatchRequest) Reset()         { *m = QueryLatestBatchRequest{} }
@@ -114,16 +125,25 @@ func (*QueryLatestBatchRequest) Descriptor() ([]byte, []int) {
 	return fileDescriptor_d8bb44cf3b31d553, []int{2}
 }
 func (m *QueryLatestBatchRequest) XXX_Unmarshal(b []byte) error {
-	return xxx_messageInfo_QueryLatestBatchRequest.Unmarshal(m, b)
+	return m.Unmarshal(b)
 }
 func (m *QueryLatestBatchRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	return xxx_messageInfo_QueryLatestBatchRequest.Marshal(b, m, deterministic)
+	if deterministic {
+		return xxx_messageInfo_QueryLatestBatchRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
 }
 func (m *QueryLatestBatchRequest) XXX_Merge(src proto.Message) {
 	xxx_messageInfo_QueryLatestBatchRequest.Merge(m, src)
 }
 func (m *QueryLatestBatchRequest) XXX_Size() int {
-	return xxx_messageInfo_QueryLatestBatchRequest.Size(m)
+	return m.Size()
 }
 func (m *QueryLatestBatchRequest) XXX_DiscardUnknown() {
 	xxx_messageInfo_QueryLatestBatchRequest.DiscardUnknown(m)
@@ -132,10 +152,7 @@ func (m *QueryLatestBatchRequest) XXX_DiscardUnknown() {
 var xxx_messageInfo_QueryLatestBatchRequest proto.InternalMessageInfo
 
 type QueryLatestBatchResponse struct {
-	Batch                *Batch   `protobuf:"bytes,1,opt,name=batch,proto3" json:"batch,omitempty"`
-	XXX_NoUnkeyedLiteral struct{} `json:"-"`
-	XXX_unrecognized     []byte   `json:"-"`
-	XXX_sizecache        int32    `json:"-"`
+	Batch *Batch `protobuf:"bytes,1,opt,name=batch,proto3" json:"batch,omitempty"`
 }
 
 func (m *QueryLatestBatchResponse) Reset()         { *m = QueryLatestBatchResponse{} }
@@ -145,16 +162,25 @@ func (*QueryLatestBatchResponse) Descriptor() ([]byte, []int) {
 	return fileDescriptor_d8bb44cf3b31d553, []int{3}
 }
 func (m *QueryLatestBatchResponse) XXX_Unmarshal(b []byte) error {
-	return xxx_messageInfo_QueryLatestBatchResponse.Unmarshal(m, b)
+	return m.Unmarshal(b)
 }
 func (m *QueryLatestBatchResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	return xxx_messageInfo_QueryLatestBatchResponse.Marshal(b, m, deterministic)
+	if deterministic {
+		return xxx_messageInfo_QueryLatestBatchResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
 }
 func (m *QueryLatestBatchResponse) XXX_Merge(src proto.Message) {
 	xxx_messageInfo_QueryLatestBatchResponse.Merge(m, src)
 }
 func (m *QueryLatestBatchResponse) XXX_Size() int {
-	return xxx_messageInfo_QueryLatestBatchResponse.Size(m)
+	return m.Size()
 }
 func (m *QueryLatestBatchResponse) XXX_DiscardUnknown() {
 	xxx_messageInfo_QueryLatestBatchResponse.DiscardUnknown(m)
@@ -170,10 +196,7 @@ func (m *QueryLatestBatchResponse) GetBatch() *Batch {
 }
 
 type QueryBatchByIDRequest struct {
-	BatchId              []byte   `protobuf:"bytes,1,opt,name=batch_id,json=batchId,proto3" json:"batch_id,omitempty"`
-	XXX_NoUnkeyedLiteral struct{} `json:"-"`
-	XXX_unrecognized     []byte   `json:"-"`
-	XXX_sizecache        int32    `json:"-"`
+	BatchId []byte `protobuf:"bytes,1,opt,name=batch_id,json=batchId,proto3" json:"batch_id,omitempty"`
 }
 
 func (m *QueryBatchByIDRequest) Reset()         { *m = QueryBatchByIDRequest{} }
@@ -183,16 +206,25 @@ func (*QueryBatchByIDRequest) Descriptor() ([]byte, []int) {
 	return fileDescriptor_d8bb44cf3b31d553, []int{4}
 }
 func (m *QueryBatchByIDRequest) XXX_Unmarshal(b []byte) error {
-	return xxx_messageInfo_QueryBatchByIDRequest.Unmarshal(m, b)
+	return m.Unmarshal(b)
 }
 func (m *QueryBatchByIDRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	return xxx_messageInfo_QueryBatchByIDRequest.Marshal(b, m, deterministic)
+	if deterministic {
+		return xxx_messageInfo_QueryBatchByIDRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
 }
 func (m *QueryBatchByIDRequest) XXX_Merge(src proto.Message) {
 	xxx_messageInfo_QueryBatchByIDRequest.Merge(m, src)
 }
 func (m *QueryBatchByIDRequest) XXX_Size() int {
-	return xxx_messageInfo_QueryBatchByIDRequest.Size(m)
+	return m.Size()
 }
 func (m *QueryBatchByIDRequest) XXX_DiscardUnknown() {
 	xxx_messageInfo_QueryBatchByIDRequest.DiscardUnknown(m)
@@ -208,10 +240,7 @@ func (m *QueryBatchByIDRequest) GetBatchId() []byte {
 }
 
 type QueryBatchByIDResponse struct {
-	Batch                *Batch   `protobuf:"bytes,1,opt,name=batch,proto3" json:"batch,omitempty"`
-	XXX_NoUnkeyedLiteral struct{} `json:"-"`
-	XXX_unrecognized     []byte   `json:"-"`
-	XXX_sizecache        int32    `json:"-"`
+	Batch *Batch `protobuf:"bytes,1,opt,name=batch,proto3" json:"batch,omitempty"`
 }
 
 func (m *QueryBatchByIDResponse) Reset()         { *m = QueryBatchByIDResponse{} }
@@ -221,16 +250,25 @@ func (*QueryBatchByIDResponse) Descriptor() ([]byte, []int) {
 	return fileDescriptor_d8bb44cf3b31d553, []int{5}
 }
 func (m *QueryBatchByIDResponse) XXX_Unmarshal(b []byte) error {
-	return xxx_messageInfo_QueryBatchByIDResponse.Unmarshal(m, b)
+	return m.Unmarshal(b)
 }
 func (m *QueryBatchByIDResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	return xxx_messageInfo_QueryBatchByIDResponse.Marshal(b, m, deterministic)
+	if deterministic {
+		return xxx_messageInfo_QueryBatchByIDResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
 }
 func (m *QueryBatchByIDResponse) XXX_Merge(src proto.Message) {
 	xxx_messageInfo_QueryBatchByIDResponse.Merge(m, src)
 }
 func (m *QueryBatchByIDResponse) XXX_Size() int {
-	return xxx_messageInfo_QueryBatchByIDResponse.Size(m)
+	return m.Size()
 }
 func (m *QueryBatchByIDResponse) XXX_DiscardUnknown() {
 	xxx_messageInfo_QueryBatchByIDResponse.DiscardUnknown(m)
@@ -246,10 +284,7 @@ func (m *QueryBatchByIDResponse) GetBatch() *Batch {
 }
 
 type QueryBatchCommitmentRequest struct {
-	BatchNumber          uint64   `protobuf:"varint,1,opt,name=batch_number,json=batchNumber,proto3" json:"batch_number,omitempty"`
-	XXX_NoUnkeyedLiteral struct{} `json:"-"`
-	XXX_unrecognized     []byte   `json:"-"`
-	XXX_sizecache        int32    `json:"-"`
+	BatchNumber uint64 `protobuf:"varint,1,opt,name=batch_number,json=batchNumber,proto3" json:"batch_number,omitempty"`
 }
 
 func (m *QueryBatchCommitmentRequest) Reset()         { *m = QueryBatchCommitmentRequest{} }
@@ -259,16 +294,25 @@ func (*QueryBatchCommitmentRequest) Descriptor() ([]byte, []int) {
 	return fileDescriptor_d8bb44cf3b31d553, []int{6}
 }
 func (m *QueryBatchCommitmentRequest) XXX_Unmarshal(b []byte) error {
-	return xxx_messageInfo_QueryBatchCommitmentRequest.Unmarshal(m, b)
+	return m.Unmarshal(b)
 }
 func (m *QueryBatchCommitmentRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	return xxx_messageInfo_QueryBatchCommitmentRequest.Marshal(b, m, deterministic)
+	if deterministic {
+		return xxx_messageInfo_QueryBatchCommitmentRequest.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
 }
 func (m *QueryBatchCommitmentRequest) XXX_Merge(src proto.Message) {
 	xxx_messageInfo_QueryBatchCommitmentRequest.Merge(m, src)
 }
 func (m *QueryBatchCommitmentRequest) XXX_Size() int {
-	return xxx_messageInfo_QueryBatchCommitmentRequest.Size(m)
+	return m.Size()
 }
 func (m *QueryBatchCommitmentRequest) XXX_DiscardUnknown() {
 	xxx_messageInfo_QueryBatchCommitmentRequest.DiscardUnknown(m)
@@ -284,14 +328,11 @@ func (m *QueryBatchCommitmentRequest) GetBatchNumber() uint64 {
 }
 
 type QueryBatchCommitmentResponse struct {
-	BatchNumber             uint64   `protobuf:"varint,1,opt,name=batch_number,json=batchNumber,proto3" json:"batch_number,omitempty"`
-	BatchId                 []byte   `protobuf:"bytes,2,opt,name=batch_id,json=batchId,proto3" json:"batch_id,omitempty"`
-	PreviousBatchCommitment []byte   `protobuf:"bytes,3,opt,name=previous_batch_commitment,json=previousBatchCommitment,proto3" json:"previous_batch_commitment,omitempty"`
-	BatchCommitment         []byte   `protobuf:"bytes,4,opt,name=batch_commitment,json=batchCommitment,proto3" json:"batch_commitment,omitempty"`
-	ResultsHash             []byte   `protobuf:"bytes,5,opt,name=results_hash,json=resultsHash,proto3" json:"results_hash,omitempty"`
-	XXX_NoUnkeyedLiteral    struct{} `json:"-"`
-	XXX_unrecognized        []byte   `json:"-"`
-	XXX_sizecache           int32    `json:"-"`
+	BatchNumber             uint64 `protobuf:"varint,1,opt,name=batch_number,json=batchNumber,proto3" json:"batch_number,omitempty"`
+	BatchId                 []byte `protobuf:"bytes,2,opt,name=batch_id,json=batchId,proto3" json:"batch_id,omitempty"`
+	PreviousBatchCommitment []byte `protobuf:"bytes,3,opt,name=previous_batch_commitment,json=previousBatchCommitment,proto3" json:"previous_batch_commitment,omitempty"`
+	BatchCommitment         []byte `protobuf:"bytes,4,opt,name=batch_commitment,json=batchCommitment,proto3" json:"batch_commitment,omitempty"`
+	ResultsHash             []byte `protobuf:"bytes,5,opt,name=results_hash,json=resultsHash,proto3" json:"results_hash,omitempty"`
 }
 
 func (m *QueryBatchCommitmentResponse) Reset()         { *m = QueryBatchCommitmentResponse{} }
@@ -301,16 +342,25 @@ func (*QueryBatchCommitmentResponse) Descriptor() ([]byte, []int) {
 	return fileDescriptor_d8bb44cf3b31d553, []int{7}
 }
 func (m *QueryBatchCommitmentResponse) XXX_Unmarshal(b []byte) error {
-	return xxx_messageInfo_QueryBatchCommitmentResponse.Unmarshal(m, b)
+	return m.Unmarshal(b)
 }
 func (m *QueryBatchCommitmentResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	return xxx_messageInfo_QueryBatchCommitmentResponse.Marshal(b, m, deterministic)
+	if deterministic {
+		return xxx_messageInfo_QueryBatchCommitmentResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
 }
 func (m *QueryBatchCommitmentResponse) XXX_Merge(src proto.Message) {
 	xxx_messageInfo_QueryBatchCommitmentResponse.Merge(m, src)
 }
 func (m *QueryBatchCommitmentResponse) XXX_Size() int {
-	return xxx_messageInfo_QueryBatchCommitmentResponse.Size(m)
+	return m.Size()
 }
 func (m *QueryBatchCommitmentResponse) XXX_DiscardUnknown() {
 	xxx_messageInfo_QueryBatchCommitmentResponse.DiscardUnknown(m)
@@ -369,35 +419,37 @@ func init() {
 }
 
 var fileDescriptor_d8bb44cf3b31d553 = []byte{
-	// 442 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xa4, 0x94, 0xdf, 0x8e, 0x93, 0x40,
-	0x14, 0xc6, 0x83, 0xbb, 0xf8, 0xe7, 0xd0, 0x64, 0x75, 0x12, 0x5d, 0x8a, 0x26, 0xba, 0xc4, 0x0b,
-	0x8d, 0x2e, 0x53, 0x30, 0xdd, 0x0b, 0xaf, 0x4c, 0x57, 0x13, 0x37, 0x1a, 0xcd, 0xf6, 0xd2, 0x9b,
-	0x06, 0xe8, 0x64, 0x21, 0x0a, 0xc3, 0xce, 0x0c, 0x44, 0xee, 0x7c, 0x48, 0x9f, 0xc1, 0xe7, 0x30,
-	0x7b, 0xa0, 0x2d, 0x85, 0x6d, 0x4a, 0xd3, 0x4b, 0x86, 0xef, 0xf7, 0x9d, 0xef, 0xcc, 0x9c, 0x1c,
-	0x78, 0x19, 0x72, 0x99, 0x70, 0xc9, 0xc5, 0x9c, 0x89, 0x80, 0xf3, 0x9f, 0x34, 0xf0, 0x55, 0x18,
-	0xd1, 0xc2, 0xa5, 0xd7, 0x39, 0x13, 0xa5, 0x93, 0x09, 0xae, 0x38, 0x31, 0x5b, 0x2a, 0x07, 0x55,
-	0x4e, 0xe1, 0x5a, 0x9b, 0x79, 0x55, 0x66, 0x4c, 0x56, 0xbc, 0x7d, 0x06, 0x8f, 0x2e, 0x6f, 0xec,
-	0x26, 0x37, 0x3f, 0xa7, 0xec, 0x3a, 0x67, 0x52, 0x91, 0x13, 0x18, 0xa0, 0x78, 0x96, 0xe6, 0x49,
-	0xc0, 0x84, 0xa9, 0xbd, 0xd0, 0x5e, 0x1d, 0x4e, 0x0d, 0x3c, 0xfb, 0x86, 0x47, 0xf6, 0x17, 0x20,
-	0x4d, 0x4e, 0x66, 0x3c, 0x95, 0x8c, 0x8c, 0x41, 0x47, 0x11, 0x12, 0x86, 0xf7, 0xdc, 0xd9, 0x94,
-	0xce, 0xa9, 0xb8, 0x4a, 0x6d, 0x0f, 0xe1, 0x18, 0xcd, 0xbe, 0xfa, 0x8a, 0x49, 0xd5, 0x8c, 0x62,
-	0x5f, 0x82, 0xd9, 0xfd, 0xb5, 0x5f, 0x35, 0x0f, 0x1e, 0xaf, 0xa2, 0x4f, 0xca, 0x8b, 0x8f, 0x8b,
-	0xb6, 0x87, 0x70, 0xbf, 0x6a, 0x3b, 0x9e, 0xa3, 0xe5, 0x60, 0x7a, 0x0f, 0xbf, 0x2f, 0xe6, 0xf6,
-	0x77, 0x78, 0xd2, 0x66, 0xf6, 0x0b, 0xf1, 0x01, 0x9e, 0xae, 0x0c, 0xcf, 0x79, 0x92, 0xc4, 0x2a,
-	0x61, 0xa9, 0xda, 0xe1, 0x05, 0xfe, 0x69, 0xf0, 0xec, 0x76, 0x8b, 0x3a, 0xd9, 0x76, 0x8f, 0xb5,
-	0x8e, 0xef, 0xac, 0x75, 0x4c, 0xde, 0xc3, 0x30, 0x13, 0xac, 0x88, 0x79, 0x2e, 0x67, 0x95, 0x26,
-	0x5c, 0x96, 0x30, 0x0f, 0x50, 0x7b, 0xbc, 0x10, 0xb4, 0x12, 0x90, 0xd7, 0xf0, 0xb0, 0x83, 0x1c,
-	0x22, 0x72, 0x14, 0xb4, 0xa4, 0x27, 0x30, 0x10, 0x4c, 0xe6, 0xbf, 0x94, 0x9c, 0x45, 0xbe, 0x8c,
-	0x4c, 0x1d, 0x65, 0x46, 0x7d, 0xf6, 0xd9, 0x97, 0x91, 0xf7, 0xf7, 0x00, 0x74, 0x6c, 0x94, 0x04,
-	0xa0, 0x63, 0x29, 0xf2, 0x66, 0xf3, 0x2d, 0x77, 0xa6, 0xd9, 0x7a, 0xdb, 0x4f, 0x5c, 0xdf, 0x9a,
-	0x02, 0xa3, 0x31, 0x6b, 0xc4, 0xdd, 0x02, 0x77, 0x47, 0xd6, 0xf2, 0x76, 0x41, 0xea, 0xaa, 0x29,
-	0x3c, 0x58, 0x8e, 0x16, 0xa1, 0x7d, 0x02, 0x37, 0x06, 0xd7, 0x1a, 0xf5, 0x07, 0xea, 0x7a, 0x7f,
-	0x34, 0x38, 0x6a, 0xbf, 0xda, 0xb8, 0x8f, 0x4b, 0x67, 0x54, 0xad, 0xb3, 0x5d, 0xb1, 0x2a, 0xc2,
-	0xe4, 0xd3, 0x8f, 0xf3, 0xab, 0x58, 0x45, 0x79, 0xe0, 0x84, 0x3c, 0xa1, 0x7e, 0x99, 0xcb, 0x28,
-	0x89, 0x65, 0x24, 0x7c, 0x6f, 0x34, 0x1a, 0xd3, 0xca, 0xf3, 0x74, 0x69, 0x7a, 0xca, 0xd2, 0xab,
-	0x38, 0x65, 0xf4, 0x77, 0xbd, 0xc6, 0x70, 0x87, 0xd1, 0xc2, 0x0d, 0xee, 0xe2, 0x1e, 0x7b, 0xf7,
-	0x7f, 0x00, 0x17, 0x2b, 0x6d, 0x9a, 0x2f, 0x05, 0x00, 0x00,
+	// 472 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xa4, 0x54, 0x3f, 0x6f, 0xd3, 0x40,
+	0x14, 0x8f, 0x69, 0xc3, 0x9f, 0x97, 0x48, 0x85, 0x93, 0xa0, 0x8e, 0x41, 0x86, 0x5a, 0x0c, 0x20,
+	0xa8, 0x2f, 0x31, 0x4a, 0x07, 0x26, 0x94, 0x32, 0x50, 0x81, 0x40, 0xcd, 0x88, 0x84, 0x22, 0x3b,
+	0x39, 0xd5, 0x16, 0xd8, 0xe7, 0xde, 0x9d, 0x2d, 0xbc, 0xf1, 0x11, 0xf8, 0x58, 0x8c, 0x1d, 0x18,
+	0x18, 0x51, 0x22, 0xf1, 0x39, 0x50, 0x9f, 0xdd, 0xd4, 0xb5, 0x1b, 0xd5, 0x51, 0x47, 0x9f, 0x7f,
+	0xff, 0xde, 0xdd, 0x4f, 0x0f, 0x9e, 0x4e, 0xb9, 0x0c, 0xb9, 0xe4, 0x62, 0xc6, 0x84, 0xc7, 0xf9,
+	0x57, 0xea, 0xb9, 0x6a, 0xea, 0xd3, 0x74, 0x40, 0x8f, 0x13, 0x26, 0x32, 0x3b, 0x16, 0x5c, 0x71,
+	0xa2, 0x57, 0x50, 0x36, 0xa2, 0xec, 0x74, 0x60, 0xac, 0xe6, 0xab, 0x2c, 0x66, 0x32, 0xe7, 0x5b,
+	0x7b, 0x70, 0xef, 0xf0, 0x54, 0x6e, 0x74, 0xfa, 0x73, 0xcc, 0x8e, 0x13, 0x26, 0x15, 0xd9, 0x81,
+	0x2e, 0x82, 0x27, 0x51, 0x12, 0x7a, 0x4c, 0xe8, 0xda, 0x13, 0xed, 0xd9, 0xe6, 0xb8, 0x83, 0x67,
+	0x1f, 0xf1, 0xc8, 0x7a, 0x0f, 0xa4, 0xcc, 0x93, 0x31, 0x8f, 0x24, 0x23, 0x43, 0x68, 0x23, 0x08,
+	0x19, 0x1d, 0xe7, 0xb1, 0xbd, 0x2a, 0x9d, 0x9d, 0xf3, 0x72, 0xb4, 0xd5, 0x83, 0x6d, 0x14, 0xfb,
+	0xe0, 0x2a, 0x26, 0x55, 0x39, 0x8a, 0x75, 0x08, 0x7a, 0xfd, 0xd7, 0xf5, 0xdc, 0x1c, 0xb8, 0x7f,
+	0x1e, 0x7d, 0x94, 0x1d, 0xbc, 0x3d, 0x1b, 0xbb, 0x07, 0xb7, 0xf3, 0xb1, 0x83, 0x19, 0x4a, 0x76,
+	0xc7, 0xb7, 0xf0, 0xfb, 0x60, 0x66, 0x7d, 0x82, 0x07, 0x55, 0xce, 0xf5, 0x42, 0xbc, 0x81, 0x87,
+	0xe7, 0x82, 0xfb, 0x3c, 0x0c, 0x03, 0x15, 0xb2, 0x48, 0xad, 0xf1, 0x02, 0xff, 0x34, 0x78, 0x74,
+	0xb9, 0x44, 0x91, 0xec, 0x6a, 0x8d, 0x0b, 0x13, 0xdf, 0xb8, 0x30, 0x31, 0x79, 0x0d, 0xbd, 0x58,
+	0xb0, 0x34, 0xe0, 0x89, 0x9c, 0xe4, 0x98, 0xe9, 0xd2, 0x42, 0xdf, 0x40, 0xec, 0xf6, 0x19, 0xa0,
+	0x92, 0x80, 0x3c, 0x87, 0xbb, 0x35, 0xca, 0x26, 0x52, 0xb6, 0xbc, 0x0a, 0x74, 0x07, 0xba, 0x82,
+	0xc9, 0xe4, 0x9b, 0x92, 0x13, 0xdf, 0x95, 0xbe, 0xde, 0x46, 0x58, 0xa7, 0x38, 0x7b, 0xe7, 0x4a,
+	0xdf, 0xf9, 0xbd, 0x01, 0x6d, 0x1c, 0x94, 0x78, 0xd0, 0x46, 0x2b, 0xf2, 0x62, 0xf5, 0x2d, 0xd7,
+	0xda, 0x6c, 0xbc, 0x6c, 0x06, 0x2e, 0x6e, 0x4d, 0x41, 0xa7, 0xd4, 0x35, 0x32, 0xb8, 0x82, 0x5c,
+	0xaf, 0xac, 0xe1, 0xac, 0x43, 0x29, 0x5c, 0x23, 0xb8, 0xb3, 0xac, 0x16, 0xa1, 0x4d, 0x02, 0x97,
+	0x8a, 0x6b, 0xf4, 0x9b, 0x13, 0x0a, 0xbf, 0x1f, 0x1a, 0x6c, 0x55, 0x5f, 0x6d, 0xd8, 0x44, 0xa5,
+	0x56, 0x55, 0x63, 0x6f, 0x5d, 0x5a, 0x1e, 0x61, 0xf4, 0xe5, 0xd7, 0xdc, 0xd4, 0x4e, 0xe6, 0xa6,
+	0xf6, 0x77, 0x6e, 0x6a, 0x3f, 0x17, 0x66, 0xeb, 0x64, 0x61, 0xb6, 0xfe, 0x2c, 0xcc, 0xd6, 0xe7,
+	0xfd, 0xa3, 0x40, 0xf9, 0x89, 0x67, 0x4f, 0x79, 0x48, 0xdd, 0x2c, 0x91, 0x7e, 0x18, 0x48, 0x5f,
+	0xb8, 0x4e, 0xbf, 0x3f, 0xa4, 0xb9, 0xd7, 0xee, 0xd2, 0x6c, 0x97, 0x45, 0x47, 0x41, 0xc4, 0xe8,
+	0xf7, 0x62, 0xbd, 0xe1, 0x6e, 0xa3, 0xe9, 0xc0, 0xbb, 0x89, 0xfb, 0xed, 0xd5, 0xff, 0x01, 0x00,
+	0xf4, 0xc2, 0x94, 0xb2, 0x47, 0x05, 0x00, 0x00,
 }
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -588,3 +640,1223 @@ var _Query_serviceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "cosmosorderbook/batch/v1/query.proto",
 }
+
+func (m *QueryBatchRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *QueryBatchRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *QueryBatchRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.BatchNumber != 0 {
+		i = encodeVarintQuery(dAtA, i, uint64(m.BatchNumber))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *QueryBatchResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *QueryBatchResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *QueryBatchResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.Batch != nil {
+		{
+			size, err := m.Batch.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintQuery(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *QueryLatestBatchRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *QueryLatestBatchRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *QueryLatestBatchRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	return len(dAtA) - i, nil
+}
+
+func (m *QueryLatestBatchResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *QueryLatestBatchResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *QueryLatestBatchResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.Batch != nil {
+		{
+			size, err := m.Batch.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintQuery(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *QueryBatchByIDRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *QueryBatchByIDRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *QueryBatchByIDRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if len(m.BatchId) > 0 {
+		i -= len(m.BatchId)
+		copy(dAtA[i:], m.BatchId)
+		i = encodeVarintQuery(dAtA, i, uint64(len(m.BatchId)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *QueryBatchByIDResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *QueryBatchByIDResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *QueryBatchByIDResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.Batch != nil {
+		{
+			size, err := m.Batch.MarshalToSizedBuffer(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = encodeVarintQuery(dAtA, i, uint64(size))
+		}
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *QueryBatchCommitmentRequest) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *QueryBatchCommitmentRequest) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *QueryBatchCommitmentRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.BatchNumber != 0 {
+		i = encodeVarintQuery(dAtA, i, uint64(m.BatchNumber))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *QueryBatchCommitmentResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *QueryBatchCommitmentResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *QueryBatchCommitmentResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if len(m.ResultsHash) > 0 {
+		i -= len(m.ResultsHash)
+		copy(dAtA[i:], m.ResultsHash)
+		i = encodeVarintQuery(dAtA, i, uint64(len(m.ResultsHash)))
+		i--
+		dAtA[i] = 0x2a
+	}
+	if len(m.BatchCommitment) > 0 {
+		i -= len(m.BatchCommitment)
+		copy(dAtA[i:], m.BatchCommitment)
+		i = encodeVarintQuery(dAtA, i, uint64(len(m.BatchCommitment)))
+		i--
+		dAtA[i] = 0x22
+	}
+	if len(m.PreviousBatchCommitment) > 0 {
+		i -= len(m.PreviousBatchCommitment)
+		copy(dAtA[i:], m.PreviousBatchCommitment)
+		i = encodeVarintQuery(dAtA, i, uint64(len(m.PreviousBatchCommitment)))
+		i--
+		dAtA[i] = 0x1a
+	}
+	if len(m.BatchId) > 0 {
+		i -= len(m.BatchId)
+		copy(dAtA[i:], m.BatchId)
+		i = encodeVarintQuery(dAtA, i, uint64(len(m.BatchId)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if m.BatchNumber != 0 {
+		i = encodeVarintQuery(dAtA, i, uint64(m.BatchNumber))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
+func encodeVarintQuery(dAtA []byte, offset int, v uint64) int {
+	offset -= sovQuery(v)
+	base := offset
+	for v >= 1<<7 {
+		dAtA[offset] = uint8(v&0x7f | 0x80)
+		v >>= 7
+		offset++
+	}
+	dAtA[offset] = uint8(v)
+	return base
+}
+func (m *QueryBatchRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.BatchNumber != 0 {
+		n += 1 + sovQuery(uint64(m.BatchNumber))
+	}
+	return n
+}
+
+func (m *QueryBatchResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Batch != nil {
+		l = m.Batch.Size()
+		n += 1 + l + sovQuery(uint64(l))
+	}
+	return n
+}
+
+func (m *QueryLatestBatchRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	return n
+}
+
+func (m *QueryLatestBatchResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Batch != nil {
+		l = m.Batch.Size()
+		n += 1 + l + sovQuery(uint64(l))
+	}
+	return n
+}
+
+func (m *QueryBatchByIDRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.BatchId)
+	if l > 0 {
+		n += 1 + l + sovQuery(uint64(l))
+	}
+	return n
+}
+
+func (m *QueryBatchByIDResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Batch != nil {
+		l = m.Batch.Size()
+		n += 1 + l + sovQuery(uint64(l))
+	}
+	return n
+}
+
+func (m *QueryBatchCommitmentRequest) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.BatchNumber != 0 {
+		n += 1 + sovQuery(uint64(m.BatchNumber))
+	}
+	return n
+}
+
+func (m *QueryBatchCommitmentResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.BatchNumber != 0 {
+		n += 1 + sovQuery(uint64(m.BatchNumber))
+	}
+	l = len(m.BatchId)
+	if l > 0 {
+		n += 1 + l + sovQuery(uint64(l))
+	}
+	l = len(m.PreviousBatchCommitment)
+	if l > 0 {
+		n += 1 + l + sovQuery(uint64(l))
+	}
+	l = len(m.BatchCommitment)
+	if l > 0 {
+		n += 1 + l + sovQuery(uint64(l))
+	}
+	l = len(m.ResultsHash)
+	if l > 0 {
+		n += 1 + l + sovQuery(uint64(l))
+	}
+	return n
+}
+
+func sovQuery(x uint64) (n int) {
+	return (math_bits.Len64(x|1) + 6) / 7
+}
+func sozQuery(x uint64) (n int) {
+	return sovQuery(uint64((x << 1) ^ uint64((int64(x) >> 63))))
+}
+func (m *QueryBatchRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: QueryBatchRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: QueryBatchRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BatchNumber", wireType)
+			}
+			m.BatchNumber = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.BatchNumber |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipQuery(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *QueryBatchResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: QueryBatchResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: QueryBatchResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Batch", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.Batch == nil {
+				m.Batch = &Batch{}
+			}
+			if err := m.Batch.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipQuery(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *QueryLatestBatchRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: QueryLatestBatchRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: QueryLatestBatchRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		default:
+			iNdEx = preIndex
+			skippy, err := skipQuery(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *QueryLatestBatchResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: QueryLatestBatchResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: QueryLatestBatchResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Batch", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.Batch == nil {
+				m.Batch = &Batch{}
+			}
+			if err := m.Batch.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipQuery(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *QueryBatchByIDRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: QueryBatchByIDRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: QueryBatchByIDRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BatchId", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.BatchId = append(m.BatchId[:0], dAtA[iNdEx:postIndex]...)
+			if m.BatchId == nil {
+				m.BatchId = []byte{}
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipQuery(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *QueryBatchByIDResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: QueryBatchByIDResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: QueryBatchByIDResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Batch", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if m.Batch == nil {
+				m.Batch = &Batch{}
+			}
+			if err := m.Batch.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipQuery(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *QueryBatchCommitmentRequest) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: QueryBatchCommitmentRequest: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: QueryBatchCommitmentRequest: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BatchNumber", wireType)
+			}
+			m.BatchNumber = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.BatchNumber |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		default:
+			iNdEx = preIndex
+			skippy, err := skipQuery(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *QueryBatchCommitmentResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: QueryBatchCommitmentResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: QueryBatchCommitmentResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BatchNumber", wireType)
+			}
+			m.BatchNumber = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.BatchNumber |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BatchId", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.BatchId = append(m.BatchId[:0], dAtA[iNdEx:postIndex]...)
+			if m.BatchId == nil {
+				m.BatchId = []byte{}
+			}
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field PreviousBatchCommitment", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.PreviousBatchCommitment = append(m.PreviousBatchCommitment[:0], dAtA[iNdEx:postIndex]...)
+			if m.PreviousBatchCommitment == nil {
+				m.PreviousBatchCommitment = []byte{}
+			}
+			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field BatchCommitment", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.BatchCommitment = append(m.BatchCommitment[:0], dAtA[iNdEx:postIndex]...)
+			if m.BatchCommitment == nil {
+				m.BatchCommitment = []byte{}
+			}
+			iNdEx = postIndex
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ResultsHash", wireType)
+			}
+			var byteLen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				byteLen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if byteLen < 0 {
+				return ErrInvalidLengthQuery
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.ResultsHash = append(m.ResultsHash[:0], dAtA[iNdEx:postIndex]...)
+			if m.ResultsHash == nil {
+				m.ResultsHash = []byte{}
+			}
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipQuery(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthQuery
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func skipQuery(dAtA []byte) (n int, err error) {
+	l := len(dAtA)
+	iNdEx := 0
+	depth := 0
+	for iNdEx < l {
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return 0, ErrIntOverflowQuery
+			}
+			if iNdEx >= l {
+				return 0, io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= (uint64(b) & 0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		wireType := int(wire & 0x7)
+		switch wireType {
+		case 0:
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return 0, ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return 0, io.ErrUnexpectedEOF
+				}
+				iNdEx++
+				if dAtA[iNdEx-1] < 0x80 {
+					break
+				}
+			}
+		case 1:
+			iNdEx += 8
+		case 2:
+			var length int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return 0, ErrIntOverflowQuery
+				}
+				if iNdEx >= l {
+					return 0, io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				length |= (int(b) & 0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if length < 0 {
+				return 0, ErrInvalidLengthQuery
+			}
+			iNdEx += length
+		case 3:
+			depth++
+		case 4:
+			if depth == 0 {
+				return 0, ErrUnexpectedEndOfGroupQuery
+			}
+			depth--
+		case 5:
+			iNdEx += 4
+		default:
+			return 0, fmt.Errorf("proto: illegal wireType %d", wireType)
+		}
+		if iNdEx < 0 {
+			return 0, ErrInvalidLengthQuery
+		}
+		if depth == 0 {
+			return iNdEx, nil
+		}
+	}
+	return 0, io.ErrUnexpectedEOF
+}
+
+var (
+	ErrInvalidLengthQuery        = fmt.Errorf("proto: negative length found during unmarshaling")
+	ErrIntOverflowQuery          = fmt.Errorf("proto: integer overflow")
+	ErrUnexpectedEndOfGroupQuery = fmt.Errorf("proto: unexpected end of group")
+)

@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 )
 
 var (
@@ -94,6 +95,39 @@ func RecordExpired(n int) {
 		return
 	}
 	ordersExpired.Add(float64(n))
+}
+
+// RecordCommitted counts orders, cancels, and fills that survived the outer commit.
+// A telemetry failure must not change the protocol result.
+func counterValue(c prometheus.Counter) float64 {
+	metric := &dto.Metric{}
+	if err := c.Write(metric); err != nil || metric.Counter == nil {
+		return 0
+	}
+	return metric.Counter.GetValue()
+}
+
+// TradesExecuted is the committed trade counter. It is for tests.
+func TradesExecuted() float64 { return counterValue(tradesExecuted) }
+
+// OrdersProcessed is the committed place counter. It is for tests.
+func OrdersProcessed() float64 { return counterValue(ordersProcessed) }
+
+// BatchCommands is the committed batch-command counter. It is for tests.
+func BatchCommands() float64 { return counterValue(batchCommands) }
+
+func RecordCommitted(orders, cancels, fills int) {
+	defer func() { _ = recover() }()
+	if orders > 0 {
+		ordersProcessed.Add(float64(orders))
+	}
+	if cancels > 0 {
+		ordersCancelled.Add(float64(cancels))
+	}
+	if fills > 0 {
+		tradesExecuted.Add(float64(fills))
+		fillsTotal.Add(float64(fills))
+	}
 }
 
 // RecordBatch counts one committed batch. d is wall time and is not stored.

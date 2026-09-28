@@ -24,6 +24,10 @@ type Config struct {
 	JournalPath     string
 	MaxCommandBytes int
 	MaxBatch        int
+	MaxOutstanding  int
+	MaxPerOwner     int
+	MaxPendingPage  int
+	MaxSeen         int
 	BatchInterval   time.Duration
 	RetryInitial    time.Duration
 	RetryMax        time.Duration
@@ -63,6 +67,21 @@ func (c Config) normalized() (Config, error) {
 	}
 	if c.MaxCommandBytes < 1 {
 		return Config{}, fmt.Errorf("sequencer: max command bytes must be positive")
+	}
+	if c.MaxOutstanding == 0 {
+		c.MaxOutstanding = 10_000
+	}
+	if c.MaxPerOwner == 0 {
+		c.MaxPerOwner = 256
+	}
+	if c.MaxPendingPage == 0 {
+		c.MaxPendingPage = 100
+	}
+	if c.MaxSeen == 0 {
+		c.MaxSeen = 10_000
+	}
+	if c.MaxOutstanding < 1 || c.MaxPerOwner < 1 || c.MaxPendingPage < 1 || c.MaxSeen < 1 {
+		return Config{}, fmt.Errorf("sequencer: queue limits must be positive")
 	}
 	if c.BatchInterval < 0 {
 		return Config{}, fmt.Errorf("sequencer: batch interval must be positive")
@@ -111,6 +130,10 @@ type Service struct {
 	quarantine     []*item
 	seen           map[[32]byte]struct{}
 	byPos          map[uint64]Status
+	outstanding    map[string]map[uint64]struct{}
+	ownerLoad      map[string]int
+	finalRing      []retainedID
+	nonceLookups   int
 	backoff        time.Duration
 	chainKnown     bool
 	chainConnected bool
@@ -137,15 +160,17 @@ func Open(cfg Config, chain Chain) (*Service, error) {
 		log = slog.Default()
 	}
 	s := &Service{
-		cfg:       cfg,
-		chain:     chain,
-		journal:   j,
-		log:       log,
-		next:      snap.next,
-		exhausted: snap.exhausted,
-		seen:      make(map[[32]byte]struct{}, len(snap.items)),
-		byPos:     make(map[uint64]Status, len(snap.items)),
-		met:       newMetrics(),
+		cfg:         cfg,
+		chain:       chain,
+		journal:     j,
+		log:         log,
+		next:        snap.next,
+		exhausted:   snap.exhausted,
+		seen:        make(map[[32]byte]struct{}, len(snap.items)),
+		byPos:       make(map[uint64]Status, len(snap.items)),
+		outstanding: map[string]map[uint64]struct{}{},
+		ownerLoad:   map[string]int{},
+		met:         newMetrics(),
 	}
 	var fix []record
 	for _, it := range snap.items {
@@ -157,13 +182,11 @@ func Open(cfg Config, chain Chain) (*Service, error) {
 			j.Close()
 			return nil, fmt.Errorf("%w: duplicate command at position %d", ErrJournalCorrupt, it.position)
 		}
-		s.seen[it.id] = struct{}{}
 		st := it.status
 		if st == StatusInFlight {
 			st = StatusPending
 			fix = append(fix, record{Position: it.position, Status: statusPending, Command: it.encoded})
 		}
-		s.byPos[it.position] = st
 		stored := &item{
 			position: it.position,
 			cmd:      cloneCommand(it.cmd),
@@ -172,9 +195,27 @@ func Open(cfg Config, chain Chain) (*Service, error) {
 		}
 		switch st {
 		case StatusPending:
+			if _, ok := s.seen[it.id]; ok {
+				j.Close()
+				return nil, fmt.Errorf("%w: duplicate command at position %d", ErrJournalCorrupt, it.position)
+			}
+			s.seen[it.id] = struct{}{}
+			s.track(stored)
+			s.ownerLoad[string(stored.cmd.Owner)]++
 			s.pending = append(s.pending, stored)
+			s.byPos[it.position] = st
 		case StatusQuarantined:
+			if _, ok := s.seen[it.id]; ok {
+				j.Close()
+				return nil, fmt.Errorf("%w: duplicate command at position %d", ErrJournalCorrupt, it.position)
+			}
+			s.seen[it.id] = struct{}{}
+			s.ownerLoad[string(stored.cmd.Owner)]++
 			s.quarantine = append(s.quarantine, stored)
+			s.byPos[it.position] = st
+		default:
+			s.byPos[it.position] = st
+			s.remember(stored)
 		}
 	}
 	if len(fix) > 0 {
@@ -321,6 +362,11 @@ func (s *Service) submitOnce(ctx context.Context) error {
 			s.mu.Unlock()
 			return err
 		}
+		for _, it := range drops {
+			s.untrack(it)
+			s.dropOwner(it)
+			s.remember(it)
+		}
 	}
 	if len(batch) == 0 {
 		s.pending = rest
@@ -423,9 +469,9 @@ func (s *Service) recover(ctx context.Context, batch []*item, cause error) error
 	var quar []*item
 	for i, d := range decisions {
 		switch d.st {
-		case statusDropped:
 		case statusQuarantined:
 			quar = append(quar, d.it)
+		case statusDropped:
 		default:
 			keep = append(keep, d.it)
 		}
@@ -440,8 +486,12 @@ func (s *Service) recover(ctx context.Context, batch []*item, cause error) error
 		switch d.st {
 		case statusDropped:
 			s.byPos[d.it.position] = StatusDropped
+			s.untrack(d.it)
+			s.dropOwner(d.it)
+			s.remember(d.it)
 		case statusQuarantined:
 			s.byPos[d.it.position] = StatusQuarantined
+			s.untrack(d.it)
 		default:
 			s.byPos[d.it.position] = StatusPending
 		}
@@ -546,6 +596,11 @@ func (s *Service) mark(batch []*item, status Status, prepend bool) error {
 	}
 	for _, it := range batch {
 		s.byPos[it.position] = status
+		if status == StatusFinalized {
+			s.untrack(it)
+			s.dropOwner(it)
+			s.remember(it)
+		}
 	}
 	s.inflight = nil
 	if prepend {
@@ -640,6 +695,127 @@ func (s *Service) resetBackoff() {
 	s.backoff = 0
 	s.met.setBackoff(0)
 	s.mu.Unlock()
+}
+
+type retainedID struct {
+	id  [32]byte
+	pos uint64
+}
+
+func (s *Service) track(it *item) {
+	key := string(it.cmd.Owner)
+	if s.outstanding[key] == nil {
+		s.outstanding[key] = map[uint64]struct{}{}
+	}
+	s.outstanding[key][it.cmd.Nonce] = struct{}{}
+}
+
+func (s *Service) untrack(it *item) {
+	key := string(it.cmd.Owner)
+	set := s.outstanding[key]
+	if set == nil {
+		return
+	}
+	delete(set, it.cmd.Nonce)
+	if len(set) == 0 {
+		delete(s.outstanding, key)
+	}
+}
+
+func (s *Service) dropOwner(it *item) {
+	key := string(it.cmd.Owner)
+	if s.ownerLoad[key] > 0 {
+		s.ownerLoad[key]--
+	}
+	if s.ownerLoad[key] == 0 {
+		delete(s.ownerLoad, key)
+	}
+}
+
+func (s *Service) remember(it *item) {
+	s.seen[it.id] = struct{}{}
+	s.finalRing = append(s.finalRing, retainedID{id: it.id, pos: it.position})
+	for len(s.finalRing) > s.cfg.MaxSeen {
+		old := s.finalRing[0]
+		s.finalRing = s.finalRing[1:]
+		if s.kept(old.id) {
+			continue
+		}
+		delete(s.seen, old.id)
+		if st := s.byPos[old.pos]; st == StatusFinalized || st == StatusDropped {
+			delete(s.byPos, old.pos)
+		}
+	}
+}
+
+func (s *Service) kept(id [32]byte) bool {
+	live := func(it *item) bool {
+		if it.id != id {
+			return false
+		}
+		switch s.byPos[it.position] {
+		case StatusFinalized, StatusDropped:
+			return false
+		default:
+			return true
+		}
+	}
+	for _, it := range s.pending {
+		if live(it) {
+			return true
+		}
+	}
+	for _, it := range s.inflight {
+		if live(it) {
+			return true
+		}
+	}
+	for _, it := range s.quarantine {
+		if live(it) {
+			return true
+		}
+	}
+	return false
+}
+
+// PendingPage returns a bounded page of in-flight and pending commands.
+// next is the offset of the following page, or 0 when this page is the last.
+func (s *Service) PendingPage(limit, offset int) ([]Receipt, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if limit <= 0 || limit > s.cfg.MaxPendingPage {
+		limit = s.cfg.MaxPendingPage
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	var out []Receipt
+	next := 0
+	i := 0
+	walk := func(it *item, st Status) bool {
+		if i < offset {
+			i++
+			return false
+		}
+		if len(out) >= limit {
+			next = i
+			return true
+		}
+		out = append(out, receiptFor(it, st))
+		i++
+		return false
+	}
+	for _, it := range s.inflight {
+		if walk(it, StatusInFlight) {
+			return out, next
+		}
+	}
+	for _, it := range s.pending {
+		if walk(it, StatusPending) {
+			return out, next
+		}
+	}
+	return out, 0
 }
 
 func (s *Service) rewind(pos uint64) {

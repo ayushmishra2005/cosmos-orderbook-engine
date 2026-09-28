@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -178,6 +179,105 @@ func TestReconnectBeforeFirstEventReplays(t *testing.T) {
 	waitClosed(t, sub)
 }
 
+func TestStreamInitialCursorFailure(t *testing.T) {
+	client := testStreamClient(2, func([]byte) ([]Event, error) { return nil, nil })
+	client.tip = func(context.Context) (int64, error) { return 0, errors.New("status down") }
+	if _, err := client.SubscribeTrades(context.Background(), 1); !errors.Is(err, ErrRPCUnavailable) {
+		t.Fatal(err)
+	}
+}
+
+func TestReconnectDoesNotEmitOlderHeight(t *testing.T) {
+	first := eventsFromABCI(5, "AA", []abci.Event{tradeEvent(1, 1)})[0]
+	replayed := eventsFromABCI(5, "AA", []abci.Event{tradeEvent(1, 1)})[0]
+	stale := eventsFromABCI(4, "BB", []abci.Event{tradeEvent(1, 9)})[0]
+	live := eventsFromABCI(6, "CC", []abci.Event{tradeEvent(1, 2)})[0]
+	var dials int
+	var mu sync.Mutex
+	second := &scriptConn{msgs: [][]byte{[]byte("stale"), []byte("live")}, block: make(chan struct{})}
+	client := testStreamClient(4, func(msg []byte) ([]Event, error) {
+		switch string(msg) {
+		case "5":
+			return []Event{first}, nil
+		case "stale":
+			return []Event{stale}, nil
+		default:
+			return []Event{live}, nil
+		}
+	})
+	client.tip = func(context.Context) (int64, error) { return 5, nil }
+	client.pages = func(_ context.Context, height int64) ([]Event, error) {
+		if height != 5 {
+			t.Fatalf("height %d", height)
+		}
+		return []Event{replayed}, nil
+	}
+	client.dialLive = func(context.Context) (liveConn, error) {
+		mu.Lock()
+		dials++
+		n := dials
+		mu.Unlock()
+		if n == 1 {
+			return &scriptConn{msgs: [][]byte{[]byte("5")}, err: ErrStreamDisconnected}, nil
+		}
+		return second, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sub, err := client.SubscribeTrades(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := readEvent(t, sub)
+	b := readEvent(t, sub)
+	c := readEvent(t, sub)
+	heights := []int64{a.ID.Height, b.ID.Height, c.ID.Height}
+	for i := 1; i < len(heights); i++ {
+		if heights[i] < heights[i-1] {
+			t.Fatalf("heights %v", heights)
+		}
+	}
+	for _, h := range heights {
+		if h == 4 {
+			t.Fatal("emitted a height behind the cursor")
+		}
+	}
+	if heights[len(heights)-1] != 6 || heights[0] != 5 {
+		t.Fatalf("heights %v", heights)
+	}
+	cancel()
+	waitClosed(t, sub)
+	deadline := time.Now().Add(time.Second)
+	for !second.closed.Load() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !second.closed.Load() {
+		t.Fatal("replacement connection stayed open")
+	}
+}
+
+func TestSlowConsumerClosesCurrentConnection(t *testing.T) {
+	conn := &scriptConn{msgs: [][]byte{[]byte("1"), []byte("2"), []byte("3")}}
+	client := testStreamClient(1, func(msg []byte) ([]Event, error) {
+		n, _ := strconv.Atoi(string(msg))
+		return eventsFromABCI(int64(n), "FF", []abci.Event{tradeEvent(1, uint64(n))}), nil
+	})
+	client.dialLive = func(context.Context) (liveConn, error) { return conn, nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sub, err := client.SubscribeTrades(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitClosed(t, sub)
+	if !errors.Is(sub.Err(), ErrSlowConsumer) {
+		t.Fatal(sub.Err())
+	}
+	if !conn.closed.Load() {
+		t.Fatal("connection stayed open")
+	}
+}
+
 func TestSlowConsumerAndConnectionFailure(t *testing.T) {
 	client := testStreamClient(1, func(msg []byte) ([]Event, error) {
 		n, _ := strconv.Atoi(string(msg))
@@ -224,10 +324,44 @@ func TestCancelDuringReconnect(t *testing.T) {
 		t.Fatal(got.ID)
 	}
 	time.Sleep(20 * time.Millisecond)
+	start := time.Now()
 	cancel()
 	waitClosed(t, sub)
+	if time.Since(start) > time.Second {
+		t.Fatal("cancel waited on the reconnect delay")
+	}
 	if !errors.Is(sub.Err(), context.Canceled) {
 		t.Fatal(sub.Err())
+	}
+}
+
+func TestMalformedEventDoesNotPanicAndReaderExits(t *testing.T) {
+	conn := &scriptConn{msgs: [][]byte{[]byte("not-json"), []byte("ok")}, block: make(chan struct{})}
+	client := testStreamClient(4, func(msg []byte) ([]Event, error) {
+		if string(msg) == "not-json" {
+			return nil, errors.New("malformed")
+		}
+		return eventsFromABCI(3, "EE", []abci.Event{tradeEvent(1, 1)}), nil
+	})
+	client.tip = func(context.Context) (int64, error) { return 2, nil }
+	client.dialLive = func(context.Context) (liveConn, error) { return conn, nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	sub, err := client.SubscribeTrades(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := readEvent(t, sub)
+	if got.ID.Height != 3 {
+		t.Fatal(got.ID.Height)
+	}
+	cancel()
+	waitClosed(t, sub)
+	deadline := time.Now().Add(time.Second)
+	for conn.stopped.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if conn.stopped.Load() == 0 || !conn.closed.Load() {
+		t.Fatal("reader or connection stayed open")
 	}
 }
 
@@ -237,7 +371,7 @@ func testStreamClient(buffer int, decode func([]byte) ([]Event, error)) *Client 
 		delay:    time.Millisecond,
 		delayMax: 5 * time.Millisecond,
 		decode:   decode,
-		tip:      func(context.Context) (int64, error) { return 0, nil },
+		tip:      func(context.Context) (int64, error) { return 1, nil },
 		pages:    func(context.Context, int64) ([]Event, error) { return nil, nil },
 	}
 }
@@ -289,12 +423,13 @@ func waitClosed(t *testing.T, sub *Subscription) {
 }
 
 type scriptConn struct {
-	mu     sync.Mutex
-	msgs   [][]byte
-	i      int
-	err    error
-	block  chan struct{}
-	closed chan struct{}
+	mu      sync.Mutex
+	msgs    [][]byte
+	i       int
+	err     error
+	block   chan struct{}
+	closed  atomic.Bool
+	stopped atomic.Int32
 }
 
 func (s *scriptConn) Recv(ctx context.Context) ([]byte, error) {
@@ -308,14 +443,20 @@ func (s *scriptConn) Recv(ctx context.Context) ([]byte, error) {
 	err := s.err
 	s.mu.Unlock()
 	if err != nil {
+		s.stopped.Add(1)
 		return nil, err
 	}
 	select {
 	case <-ctx.Done():
+		s.stopped.Add(1)
 		return nil, ctx.Err()
 	case <-s.block:
+		s.stopped.Add(1)
 		return nil, ErrStreamDisconnected
 	}
 }
 
-func (s *scriptConn) Close() error { return nil }
+func (s *scriptConn) Close() error {
+	s.closed.Store(true)
+	return nil
+}

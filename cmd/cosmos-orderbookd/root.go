@@ -138,7 +138,7 @@ func newApp(logger log.Logger, db dbm.DB, opts servertypes.AppOptions) servertyp
 	if err != nil {
 		panic(err)
 	}
-	application, err := app.New(logger, db, chainID)
+	application, err := app.New(logger, db, chainID, server.DefaultBaseappOptions(opts)...)
 	if err != nil {
 		panic(err)
 	}

@@ -229,18 +229,11 @@ func TestExportImportAvailableBalances(t *testing.T) {
 		InitialHeight:   exported.Height,
 	})
 	require.NoError(t, err)
-	_, err = restored.FinalizeBlock(&abci.RequestFinalizeBlock{
-		Height: exported.Height,
-		Time:   time.Unix(1_700_000_000, 0).UTC(),
-	})
-	require.NoError(t, err)
-	_, err = restored.Commit()
-	require.NoError(t, err)
-	got, err := restored.Keeper.SnapshotDigest(restored.NewContext(true))
+	got, err := restored.Keeper.SnapshotDigest(qctx(restored))
 	require.NoError(t, err)
 	require.Equal(t, want, got)
-	require.NoError(t, restored.Keeper.CheckInvariants(restored.NewContext(true)))
-	require.NoError(t, restored.Keeper.CheckCustody(restored.NewContext(true)))
+	require.NoError(t, restored.Keeper.CheckInvariants(qctx(restored)))
+	require.NoError(t, restored.Keeper.CheckCustody(qctx(restored)))
 }
 
 func TestExportOpenBookValidates(t *testing.T) {
@@ -292,7 +285,7 @@ func TestRestartFromDatabase(t *testing.T) {
 
 	restored, err := New(log.NewNopLogger(), db, testChainID)
 	require.NoError(t, err)
-	ctx = restored.NewContext(true)
+	ctx = qctx(restored)
 	gotEx, err := restored.Keeper.SnapshotDigest(ctx)
 	require.NoError(t, err)
 	gotBatch, err := restored.BatchKeeper.SnapshotDigest(ctx)

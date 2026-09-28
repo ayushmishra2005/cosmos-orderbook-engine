@@ -2,8 +2,12 @@ package app
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
+	"unsafe"
+
+	storestate "github.com/cosmos/cosmos-sdk/baseapp/state"
 
 	abci "github.com/cometbft/cometbft/abci/types"
 	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
@@ -363,9 +367,24 @@ func place(owner sdk.AccAddress, market uint64, side v1.Side, typ v1.OrderType, 
 func deliver(t *testing.T, application *App, priv cryptotypes.PrivKey, msg sdk.Msg, expPass bool) {
 	t.Helper()
 	addr := sdk.AccAddress(priv.PubKey().Address())
-	acc := application.AccountKeeper.GetAccount(application.NewContext(true), addr)
+	acc := application.AccountKeeper.GetAccount(qctx(application), addr)
 	require.NotNil(t, acc)
-	header := cmtproto.Header{Height: application.LastBlockHeight() + 1, Time: time.Unix(1_700_000_000, 0).UTC()}
+	height := nextExecutionHeight(application)
+	if application.LastBlockHeight() == 0 {
+		bz := signedTx(t, application, trader{priv: priv, addr: addr}, []sdk.Msg{msg}, sdk.NewCoins(sdk.NewInt64Coin(sdk.DefaultBondDenom, 0)), simtestutil.DefaultGenTxGas, acc.GetAccountNumber(), acc.GetSequence())
+		res, err := application.FinalizeBlock(&abci.RequestFinalizeBlock{Height: height, Txs: [][]byte{bz}})
+		require.NoError(t, err)
+		require.Len(t, res.TxResults, 1)
+		if expPass {
+			require.Zero(t, res.TxResults[0].Code, res.TxResults[0].Log)
+		} else {
+			require.NotZero(t, res.TxResults[0].Code)
+		}
+		_, err = application.Commit()
+		require.NoError(t, err)
+		return
+	}
+	header := cmtproto.Header{Height: height, Time: time.Unix(1_700_000_000, 0).UTC()}
 	_, _, err := simtestutil.SignCheckDeliver(
 		t, application.TxConfig(), application.BaseApp, header, []sdk.Msg{msg}, testChainID,
 		[]uint64{acc.GetAccountNumber()}, []uint64{acc.GetSequence()}, expPass, expPass, priv,
@@ -375,29 +394,58 @@ func deliver(t *testing.T, application *App, priv cryptotypes.PrivKey, msg sdk.M
 	}
 }
 
+// qctx reads the imported genesis while InitChain's writes are still in the
+// uncommitted finalize branch. After the first commit, it is the committed store.
+func qctx(application *App) sdk.Context {
+	if application.LastBlockHeight() > 0 {
+		return application.NewContext(true)
+	}
+	field := reflect.ValueOf(application.BaseApp).Elem().FieldByName("stateManager")
+	mgr := reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Interface().(*storestate.Manager)
+	if st := mgr.GetState(sdk.ExecModeFinalize); st != nil {
+		return st.Context()
+	}
+	return application.NewContext(true)
+}
+
+// nextExecutionHeight matches BaseApp.validateFinalizeBlockHeight.
+// After InitChain with initial height H+1, LastBlockHeight is still 0 and
+// the first committed block is that initial height. Later blocks are last+1.
+func nextExecutionHeight(application *App) int64 {
+	last := application.LastBlockHeight()
+	if last > 0 {
+		return last + 1
+	}
+	initial := reflect.ValueOf(application.BaseApp).Elem().FieldByName("initialHeight").Int()
+	if initial > 1 {
+		return initial
+	}
+	return 1
+}
+
 func mustBal(t *testing.T, application *App, owner []byte, asset domain.AssetID) exchangetypes.Balance {
 	t.Helper()
-	bal, err := application.Keeper.GetBalance(application.NewContext(true), owner, asset)
+	bal, err := application.Keeper.GetBalance(qctx(application), owner, asset)
 	require.NoError(t, err)
 	return bal
 }
 
 func mustNonce(t *testing.T, application *App, owner []byte) uint64 {
 	t.Helper()
-	n, err := application.Keeper.GetCommandNonce(application.NewContext(true), owner)
+	n, err := application.Keeper.GetCommandNonce(qctx(application), owner)
 	require.NoError(t, err)
 	return n
 }
 
 func requireCustody(t *testing.T, application *App) {
 	t.Helper()
-	ctx := application.NewContext(true)
+	ctx := qctx(application)
 	for _, id := range []domain.AssetID{1, 2} {
 		asset, err := application.Keeper.GetAsset(ctx, id)
 		require.NoError(t, err)
 		sum, err := application.Keeper.SumLiabilities(ctx, id)
 		require.NoError(t, err)
 		coin := application.BankKeeper.GetBalance(ctx, exchangekeeper.ModuleAddress(), asset.Denom)
-		require.Truef(t, coin.Amount.GTE(sdkmath.NewIntFromUint64(sum)), "asset %d custody %s liabilities %d", id, coin.Amount, sum)
+		require.Truef(t, coin.Amount.GTE(sum), "asset %d custody %s liabilities %s", id, coin.Amount, sum)
 	}
 }

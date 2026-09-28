@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"math"
 	"os"
@@ -13,7 +14,8 @@ import (
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/canonical"
 )
 
-const journalMagic = "OBJ1"
+const journalMagic = "OBJ2"
+const journalRecordVersion byte = 2
 
 const (
 	statusPending     byte = 1
@@ -144,7 +146,7 @@ func (j *Journal) replay() (snapshot, error) {
 		return snapshot{}, fmt.Errorf("%w: header: %v", ErrJournalCorrupt, err)
 	}
 	if string(magic) != journalMagic {
-		return snapshot{}, fmt.Errorf("%w: header", ErrJournalCorrupt)
+		return snapshot{}, fmt.Errorf("%w: unsupported journal header %q", ErrJournalCorrupt, magic)
 	}
 	byPos := make(map[uint64]*stored)
 	var order []uint64
@@ -266,16 +268,11 @@ func writeRecord(w io.Writer, rec record) error {
 	if rec.Position == 0 || len(rec.Command) == 0 || len(rec.Command) > maxBlob {
 		return fmt.Errorf("%w: record", ErrJournalCorrupt)
 	}
-	payload := make([]byte, 0, 16+len(rec.Command))
-	payload = append(payload, 1)
-	var num [8]byte
-	binary.BigEndian.PutUint64(num[:], rec.Position)
-	payload = append(payload, num[:]...)
-	payload = append(payload, rec.Status)
-	var n [4]byte
-	binary.BigEndian.PutUint32(n[:], uint32(len(rec.Command)))
-	payload = append(payload, n[:]...)
-	payload = append(payload, rec.Command...)
+	body := recordBody(rec)
+	sum := crc32.ChecksumIEEE(body)
+	payload := make([]byte, len(body)+4)
+	copy(payload, body)
+	binary.BigEndian.PutUint32(payload[len(body):], sum)
 	var frame [4]byte
 	binary.BigEndian.PutUint32(frame[:], uint32(len(payload)))
 	if _, err := w.Write(frame[:]); err != nil {
@@ -283,6 +280,20 @@ func writeRecord(w io.Writer, rec record) error {
 	}
 	_, err := w.Write(payload)
 	return err
+}
+
+func recordBody(rec record) []byte {
+	body := make([]byte, 0, 14+len(rec.Command))
+	body = append(body, journalRecordVersion)
+	var num [8]byte
+	binary.BigEndian.PutUint64(num[:], rec.Position)
+	body = append(body, num[:]...)
+	body = append(body, rec.Status)
+	var n [4]byte
+	binary.BigEndian.PutUint32(n[:], uint32(len(rec.Command)))
+	body = append(body, n[:]...)
+	body = append(body, rec.Command...)
+	return body
 }
 
 func readRecord(r io.Reader) (record, error) {
@@ -294,23 +305,27 @@ func readRecord(r io.Reader) (record, error) {
 		return record{}, fmt.Errorf("%w: %v", ErrJournalCorrupt, err)
 	}
 	n := binary.BigEndian.Uint32(frame[:])
-	if n < 14 || n > maxBlob {
+	if n < 18 || n > maxBlob {
 		return record{}, fmt.Errorf("%w: record length", ErrJournalCorrupt)
 	}
 	payload := make([]byte, n)
 	if _, err := io.ReadFull(r, payload); err != nil {
 		return record{}, fmt.Errorf("%w: %v", ErrJournalCorrupt, err)
 	}
-	if payload[0] != 1 {
+	body, sumBytes := payload[:len(payload)-4], payload[len(payload)-4:]
+	if crc32.ChecksumIEEE(body) != binary.BigEndian.Uint32(sumBytes) {
+		return record{}, fmt.Errorf("%w: record checksum", ErrJournalCorrupt)
+	}
+	if body[0] != journalRecordVersion {
 		return record{}, fmt.Errorf("%w: record version", ErrJournalCorrupt)
 	}
-	pos := binary.BigEndian.Uint64(payload[1:9])
-	status := payload[9]
-	cmdLen := binary.BigEndian.Uint32(payload[10:14])
-	if int(cmdLen) != len(payload)-14 {
+	pos := binary.BigEndian.Uint64(body[1:9])
+	status := body[9]
+	cmdLen := binary.BigEndian.Uint32(body[10:14])
+	if int(cmdLen) != len(body)-14 {
 		return record{}, fmt.Errorf("%w: command length", ErrJournalCorrupt)
 	}
-	return record{Position: pos, Status: status, Command: payload[14:]}, nil
+	return record{Position: pos, Status: status, Command: append([]byte(nil), body[14:]...)}, nil
 }
 
 func syncDir(path string) error {

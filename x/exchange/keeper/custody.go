@@ -246,12 +246,14 @@ func (k Keeper) initMarket(ctx context.Context, market types.Market) error {
 	return kv.Set(key, bz)
 }
 
-// SumLiabilities is the sum of available and locked atoms for one asset.
-func (k Keeper) SumLiabilities(ctx context.Context, assetID domain.AssetID) (uint64, error) {
+// SumLiabilities is the exact sum of available and locked atoms for one asset.
+// The total may exceed uint64. Each account still obeys ValidateBalanceCapacity.
+// The fee-collector row is included once, as an ordinary balance.
+func (k Keeper) SumLiabilities(ctx context.Context, assetID domain.AssetID) (sdkmath.Int, error) {
 	if assetID == 0 {
-		return 0, domain.ErrInvalidAsset
+		return sdkmath.Int{}, domain.ErrInvalidAsset
 	}
-	var sum uint64
+	sum := sdkmath.ZeroInt()
 	err := k.iteratePrefix(ctx, []byte{canonical.PrefixBalance}, func(key, value []byte) (bool, error) {
 		_, id, err := canonical.DecodeBalanceKey(key)
 		if err != nil {
@@ -264,12 +266,11 @@ func (k Keeper) SumLiabilities(ctx context.Context, assetID domain.AssetID) (uin
 		if err != nil {
 			return false, err
 		}
-		next, err := arithmetic.Add(bal.Available, bal.Locked)
-		if err != nil {
+		if err := types.ValidateBalanceCapacity(bal.Available, bal.Locked); err != nil {
 			return false, err
 		}
-		sum, err = arithmetic.Add(sum, next)
-		return false, err
+		sum = sum.Add(sdkmath.NewIntFromUint64(bal.Available)).Add(sdkmath.NewIntFromUint64(bal.Locked))
+		return false, nil
 	})
 	return sum, err
 }

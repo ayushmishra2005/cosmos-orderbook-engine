@@ -146,14 +146,26 @@ func decodeGenesisOrder(pb *GenesisOrder) (GenesisActiveOrder, error) {
 	if pb.CommandNonce == 0 {
 		return GenesisActiveOrder{}, fmt.Errorf("%w: command nonce", exchangetypes.ErrCorrupt)
 	}
+	side, err := domainSide(pb.Side)
+	if err != nil {
+		return GenesisActiveOrder{}, err
+	}
+	orderType, err := domainOrderType(pb.OrderType)
+	if err != nil {
+		return GenesisActiveOrder{}, err
+	}
+	tif, err := domainTimeInForce(pb.TimeInForce)
+	if err != nil {
+		return GenesisActiveOrder{}, err
+	}
 	stored := exchangetypes.StoredOrder{
 		Order: domain.Order{
 			ID:                id,
 			Owner:             append([]byte(nil), owner...),
 			MarketID:          domain.MarketID(pb.MarketId),
-			Side:              domain.Side(pb.Side),
-			Type:              domain.OrderType(pb.OrderType),
-			TimeInForce:       domain.TimeInForce(pb.TimeInForce),
+			Side:              side,
+			Type:              orderType,
+			TimeInForce:       tif,
 			Price:             domain.Price(pb.PriceTicks),
 			OriginalQuantity:  domain.Quantity(pb.OriginalLots),
 			RemainingQuantity: domain.Quantity(pb.RemainingLots),
@@ -365,6 +377,43 @@ func (gs GenesisState) validateBalances(assets map[uint64]string, orders []Genes
 		}
 	}
 	return nil
+}
+
+func domainSide(v Side) (domain.Side, error) {
+	switch v {
+	case Side_SIDE_BUY:
+		return domain.SideBuy, nil
+	case Side_SIDE_SELL:
+		return domain.SideSell, nil
+	default:
+		return 0, domain.ErrInvalidSide
+	}
+}
+
+func domainOrderType(v OrderType) (domain.OrderType, error) {
+	switch v {
+	case OrderType_ORDER_TYPE_LIMIT:
+		return domain.OrderTypeLimit, nil
+	case OrderType_ORDER_TYPE_MARKET:
+		return domain.OrderTypeMarket, nil
+	default:
+		return 0, domain.ErrInvalidOrderType
+	}
+}
+
+func domainTimeInForce(v TimeInForce) (domain.TimeInForce, error) {
+	switch v {
+	case TimeInForce_TIME_IN_FORCE_GTC:
+		return domain.TimeInForceGTC, nil
+	case TimeInForce_TIME_IN_FORCE_IOC:
+		return domain.TimeInForceIOC, nil
+	case TimeInForce_TIME_IN_FORCE_FOK:
+		return domain.TimeInForceFOK, nil
+	case TimeInForce_TIME_IN_FORCE_GTD:
+		return domain.TimeInForceGTD, nil
+	default:
+		return 0, domain.ErrInvalidTimeInForce
+	}
 }
 
 func orderReserve(market exchangetypes.Market, order domain.Order) (domain.AssetID, uint64, error) {

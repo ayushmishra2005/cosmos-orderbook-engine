@@ -8,7 +8,6 @@ import (
 	sdkmath "cosmossdk.io/math"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/arithmetic"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/canonical"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/domain"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/x/exchange/types"
@@ -225,22 +224,22 @@ func (k Keeper) requireBacking(ctx context.Context, gs v1.GenesisState) error {
 	for _, asset := range gs.Assets {
 		assets[asset.Id] = asset.Denom
 	}
-	sums := make(map[uint64]uint64)
+	sums := make(map[uint64]sdkmath.Int)
 	for _, bal := range gs.Balances {
-		row, err := arithmetic.Add(bal.Available, bal.Locked)
-		if err != nil {
+		if err := types.ValidateBalanceCapacity(bal.Available, bal.Locked); err != nil {
 			return err
 		}
-		next, err := arithmetic.Add(sums[bal.AssetId], row)
-		if err != nil {
-			return err
+		row := sdkmath.NewIntFromUint64(bal.Available).Add(sdkmath.NewIntFromUint64(bal.Locked))
+		cur := sums[bal.AssetId]
+		if cur.IsNil() {
+			cur = sdkmath.ZeroInt()
 		}
-		sums[bal.AssetId] = next
+		sums[bal.AssetId] = cur.Add(row)
 	}
 	module := ModuleAddress()
 	for id, sum := range sums {
 		coin := k.bank.GetBalance(ctx, module, assets[id])
-		if coin.Amount.LT(sdkmath.NewIntFromUint64(sum)) {
+		if coin.Amount.LT(sum) {
 			return types.ErrUnbacked
 		}
 	}

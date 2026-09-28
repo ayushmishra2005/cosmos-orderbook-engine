@@ -229,7 +229,15 @@ tx() {
     return 1
   fi
   for _ in $(seq 1 40); do
-    if "$bin" query tx "$hash" --node "$node" --home "$home/node0" -o json >/dev/null 2>&1; then
+    local qout
+    if qout="$("$bin" query tx "$hash" --node "$node" --home "$home/node0" -o json 2>/dev/null)"; then
+      local qcode
+      qcode="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("code", 1))' <<<"$qout")"
+      if [[ "$qcode" != "0" ]]; then
+        echo "$qout" >&2
+        echo "tx $hash committed with code $qcode" >&2
+        return 1
+      fi
       return 0
     fi
     sleep 0.4
@@ -244,8 +252,10 @@ query_all() {
   local first=""
   for i in $(seq 0 $((nodes - 1))); do
     local out
-    if ! out="$("$bin" "$@" --node "tcp://127.0.0.1:$(rpc_port "$i")" --home "$home/node0" -o json 2>&1)"; then
-      out="ERROR ${out}"
+    if ! out="$("$bin" "$@" --node "tcp://127.0.0.1:$(rpc_port "$i")" --home "$home/node0" -o json 2>/dev/null)"; then
+      echo "query $name failed on node$i" >&2
+      echo "$out" >&2
+      return 1
     fi
     if [[ -z "$first" ]]; then
       first="$out"
@@ -257,6 +267,24 @@ query_all() {
     fi
   done
   printf '%s\n' "$first"
+}
+
+query_not_found() {
+  local name="$1"
+  shift
+  for i in $(seq 0 $((nodes - 1))); do
+    local out
+    if out="$("$bin" "$@" --node "tcp://127.0.0.1:$(rpc_port "$i")" --home "$home/node0" -o json 2>&1)"; then
+      echo "$name succeeded on node$i; expected not found" >&2
+      echo "$out" >&2
+      return 1
+    fi
+    if [[ "$out" != *"not found"* ]]; then
+      echo "$name on node$i was not the expected not-found result" >&2
+      echo "$out" >&2
+      return 1
+    fi
+  done
 }
 
 smoke() {
@@ -289,11 +317,9 @@ smoke() {
   query_all "bob balances" query exchange balances "$bob" >/dev/null
   query_all trades query exchange trades 1 >/dev/null
   query_all orderbook query exchange orderbook 1 >/dev/null
-  local batch_err
-  batch_err="$(query_all "latest batch" query batch latest)"
+  query_not_found "latest batch" query batch latest
   echo "agreed at height $height"
-  echo "batch query: ${batch_err}" | head -c 500
-  echo
+  echo "batch query: not found on every node"
 }
 
 case "${1:-start}" in

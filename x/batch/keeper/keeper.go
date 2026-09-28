@@ -80,7 +80,20 @@ func (k Keeper) FinalizeBatch(ctx context.Context, msg *v1.MsgFinalizeBatch) (ty
 	if err != nil {
 		return types.Batch{}, err
 	}
-	telemetry.RecordBatch(len(out.Results), time.Since(start))
+	if sdk.UnwrapSDKContext(ctx).ExecMode() == sdk.ExecModeFinalize {
+		telemetry.RecordBatch(len(out.Results), time.Since(start))
+		places, cancels, fills := 0, 0, 0
+		for _, result := range out.Results {
+			fills += len(result.Trades)
+			switch result.Type {
+			case types.CommandPlace:
+				places++
+			case types.CommandCancel:
+				cancels++
+			}
+		}
+		telemetry.RecordCommitted(places, cancels, fills)
+	}
 	return out, nil
 }
 
