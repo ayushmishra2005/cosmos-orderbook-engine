@@ -40,9 +40,17 @@ The project goal is a serious Cosmos SDK central limit order book: integer ticks
 - A mismatched previous commitment is rejected and leaves the head unchanged
 - The commitment binds the batch, its results, the revisions, and the execution height. It is not an exchange state root, a validity proof, or a fraud proof
 
+**Implemented — milestone 6, off-chain sequencer**
+
+- `orderbook-sequencer` admits owner-signed place and cancel commands
+- One writer assigns a monotonic position and appends it to a local journal before admission succeeds
+- The oldest pending commands become `MsgFinalizeBatch` and are signed by the configured submitter
+- A command is finalized only after the chain includes the batch
+- Admission is provisional. It is not execution and it is not chain acceptance
+
 **Planned**
 
-- Sequencer admission and batch building
+- Prometheus metrics and websocket feeds
 
 `pkg/matching` still does not import the SDK.
 
@@ -67,11 +75,11 @@ x/exchange          keeper, module, messages, queries
 x/batch             ordered batch execution
 app                 chain wiring
 cmd/cosmos-orderbookd
+cmd/orderbook-sequencer
+sequencer           admission, journal, batch building, chain submission
 benchmarks          matcher benchmarks
 docs                architecture, matching, state layout
 ```
-
-The sequencer is not in the tree yet.
 
 ## Matching example
 
@@ -92,6 +100,27 @@ The script initializes one validator, funds `alice` with `base` and `bob` with `
 build/cosmos-orderbookd tx exchange deposit 1000base --from alice --chain-id orderbook-1 --keyring-backend test --home .localnet --fees 1stake -y
 build/cosmos-orderbookd q exchange markets --home .localnet
 ```
+
+## Sequencer
+
+`orderbook-sequencer` is off-chain. Validators still execute every command. `POST /v1/commands` returns `provisional: true` after the command is checked and written to the journal. That response does not mean the order executed or that the chain accepted it.
+
+The process reads the latest batch commitment and exchange revision, builds `MsgFinalizeBatch` from the oldest pending positions, and broadcasts it with the Cosmos SDK keyring. The key is not stored in a config file. Commands stay pending if the transaction fails. A nonce that the chain has already consumed is dropped on the next attempt. Finalized commands are not submitted again after a restart.
+
+```bash
+make build
+./scripts/localnet.sh
+```
+
+In another shell, after the node is producing blocks:
+
+```bash
+./build/orderbook-sequencer --home .localnet --from submitter --chain-id orderbook-1
+```
+
+`--node` defaults to `http://127.0.0.1:26657`. The same values can be set with `ORDERBOOK_NODE`, `ORDERBOOK_CHAIN_ID`, `ORDERBOOK_INSTANCE_ID`, `ORDERBOOK_JOURNAL`, `ORDERBOOK_LISTEN`, `ORDERBOOK_FROM`, `ORDERBOOK_KEYRING_BACKEND`, `ORDERBOOK_HOME`, `ORDERBOOK_MAX_BATCH`, `ORDERBOOK_BATCH_INTERVAL`, `ORDERBOOK_FEES`, and `ORDERBOOK_GAS`.
+
+`POST /v1/commands` takes one JSON command. `chain_id`, `exchange_instance_id`, and `owner` are text. `pub_key`, `signature`, and `cancel.order_id` are hex. The signature is over the canonical batch-command bytes, not over this JSON. `GET /health` reports process liveness. `GET /v1/pending` lists commands that are not yet finalized.
 
 ## Tests
 

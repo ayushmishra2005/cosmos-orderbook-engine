@@ -1,6 +1,6 @@
 # Architecture
 
-`cosmos-orderbook-engine` is a Cosmos SDK exchange. Matching is a pure function. `x/exchange` owns the store, reservations, settlement, and fees. `x/batch` submits an ordered list of signed commands and runs them through that keeper. The chain binary wires auth, bank, staking, genutil, consensus, exchange, and batch. The sequencer is not implemented.
+`cosmos-orderbook-engine` is a Cosmos SDK exchange. Matching is a pure function. `x/exchange` owns the store, reservations, settlement, and fees. `x/batch` submits an ordered list of signed commands and runs them through that keeper. The chain binary wires auth, bank, staking, genutil, consensus, exchange, and batch. `orderbook-sequencer` is an off-chain process. It does not decide fills, balances, or fees.
 
 Toolchain: Go 1.26.x and Cosmos SDK v0.54.4 (CometBFT v0.39.4 via that SDK). The matcher does not import the SDK.
 
@@ -82,7 +82,7 @@ The batch is one cache around those calls. The exchange keeper still opens its o
 
 Each command is signed by its owner with secp256k1 over canonical bytes (`cosmos-orderbook/batch-command/v1`), not JSON or protobuf. The public key must derive the owner. The chain ID, exchange instance, and protocol version must match. The command uses the exchange account nonce, the same nonce as a direct place or cancel.
 
-One genesis address may submit batches. That authorization is temporary and centralized. There is no sequencer, submitter rotation, or proof system.
+One genesis address may submit batches. That authorization is temporary and centralized. The off-chain sequencer uses that submitter. There is no submitter rotation or proof system.
 
 The first finalized batch number is 1. The next number is the previous number plus one. A duplicate, skipped, or older number is rejected. The current exchange revision must equal `expectedExchangeRevision` before the first command runs. `BeginBlock` expiration can advance the revision before transactions in that block.
 
@@ -93,6 +93,14 @@ The first finalized batch number is 1. The next number is the previous number pl
 `BatchCommitment` is SHA-256 over `cosmos-orderbook/batch-commitment/v1`, version 1, chain ID, exchange instance, batch number, `BatchID`, the previous commitment, execution height, pre and post exchange revisions, and `ResultsHash`. The height is the consensus block height. Batch 1's previous commitment is 32 zero bytes. A later batch must name the current head. The head changes only after every command succeeds.
 
 `BatchCommitment` binds the accepted batch to its previous commitment and its execution result. It does not prove the full exchange state. Validators still re-execute the batch. It is not a validity proof, a fraud proof, or a data-availability proof.
+
+## Sequencer
+
+`sequencer` accepts the same canonical signed commands as `x/batch`. HTTP JSON is only transport. One lock assigns the next position and appends the command to a local journal before the caller is told it was accepted. That acceptance is provisional.
+
+The batch loop reads the current batch head and exchange revision, freezes the oldest pending commands, and submits `MsgFinalizeBatch` through a normal Cosmos transaction. The submitter key stays in the SDK keyring. A rejected batch returns its commands to pending, except a nonce the chain has already passed, which is dropped. Finalized commands are not queued again after a restart.
+
+The journal is not chain state. It is not an exchange state root.
 
 ## Application
 

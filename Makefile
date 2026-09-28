@@ -2,6 +2,7 @@
 
 build:
 	go build -o build/cosmos-orderbookd ./cmd/cosmos-orderbookd
+	go build -o build/orderbook-sequencer ./cmd/orderbook-sequencer
 
 test:
 	go test ./...
