@@ -410,6 +410,7 @@ func (k Keeper) cancel(ctx sdk.Context, cmd types.CancelOrderCommand) (types.Can
 	}
 	emit(ctx, types.EventTypeOrderCancelled,
 		sdk.NewAttribute("order_id", order.Order.ID.String()),
+		sdk.NewAttribute("market_id", u64(uint64(order.Order.MarketID))),
 		sdk.NewAttribute("owner", sdk.AccAddress(owner).String()),
 		sdk.NewAttribute("asset_id", u64(uint64(asset))),
 		sdk.NewAttribute("released", u64(amount)),

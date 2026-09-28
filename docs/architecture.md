@@ -123,3 +123,13 @@ Genesis exports assets, markets, available and locked balances, resting orders, 
 Trade records are exported as well. They do not change later matching. They are included because the trade-sequence check requires a contiguous history `1..N` and a counter equal to `N`. The next trade uses `N+1`.
 
 `x/batch` genesis exports the authorized submitter, the latest batch number, the head commitment, and the finalized batch records. After import the next batch must name that same head. The order ID instance is `orderbook-v1`. Clients do not choose a new order's ID. The usual local chain still funds bank accounts in genesis and deposits after start.
+
+## Client
+
+`client/go` is an external integration layer. It calls the existing gRPC query services and broadcasts ordinary Cosmos transactions. It does not read the KV store and it does not assign order IDs. A market order still carries the caller's worst acceptable tick. Owner-signed sequencer commands use `canonical.CommandSignBytes`, the same bytes `x/batch` verifies. They are not JSON signatures.
+
+Streams subscribe to CometBFT `NewBlock` and decode the events `x/exchange` and `x/batch` already emit. The stream is not authoritative. A disconnect does not affect matching, settlement, ordering, batch execution, or commitments. Reconnect uses a bounded delay and may deliver an event again. Each event carries height, transaction hash when it has one, and the event index inside that transaction or block. Consumers can deduplicate. Delivery is at-least-once, not exactly-once.
+
+A subscriber that does not keep up is closed with a slow-consumer error. The node is not blocked on that subscriber. Filters are market ID and event type.
+
+Fill, cancel, and expire events include `market_id` in addition to the attributes they already had. That attribute is not an input to matching, fees, nonces, order IDs, or batch commitments. CometBFT's results hash does not include events.

@@ -32,6 +32,7 @@ func emitOrderEvents(ctx sdk.Context, plan executionPlan) {
 		}
 		emit(ctx, kind,
 			sdk.NewAttribute("order_id", order.ID.String()),
+			sdk.NewAttribute("market_id", u64(uint64(order.MarketID))),
 			sdk.NewAttribute("remaining", u64(uint64(plan.remaining))),
 		)
 	}
@@ -42,6 +43,7 @@ func emitOrderEvents(ctx sdk.Context, plan executionPlan) {
 		}
 		emit(ctx, kind,
 			sdk.NewAttribute("order_id", maker.order.Order.ID.String()),
+			sdk.NewAttribute("market_id", u64(uint64(maker.order.Order.MarketID))),
 			sdk.NewAttribute("remaining", u64(uint64(maker.order.Order.RemainingQuantity))),
 		)
 	}

@@ -1,77 +1,35 @@
 # cosmos-orderbook-engine
 
-> High-performance Cosmos SDK exchange engine with a deterministic CLOB, order matcher, trade execution coordinator, settlement modules and batched Layer-2 execution environment.
+Cosmos SDK central limit order book. Prices are integer ticks. Quantities are integer lots. Matching is price-time priority. Validators replay the same match plan. This repository is that engine.
 
-The project goal is a serious Cosmos SDK central limit order book: integer ticks and lots, price-time priority, and a match plan that validators can replay. This repository is that engine. It is not a production rollup, and it does not implement fraud proofs, validity proofs, or a decentralized sequencer.
+It is not a production deployment. It does not implement fraud proofs, validity proofs, rollup verification, or a decentralized sequencer.
 
-## Status
+```mermaid
+flowchart TD
+  client[Go Client]
+  client --> direct[Direct Cosmos Tx]
+  client --> seq[Sequencer]
+  direct --> mods["x/batch / x/exchange"]
+  seq --> mods
+  mods --> match[Matcher + Settlement]
+  match --> chain[Cosmos SDK / CometBFT]
+  chain --> events[Committed Events]
+  events --> stream[Client Stream]
+```
 
-**Implemented — milestone 1, deterministic matching foundation**
+## Implemented
 
-- Domain types, checked `uint64` arithmetic, SHA-256 order IDs, sequence and nonce primitives
-- Pure price-time matcher and an in-memory cursor with the same byte order as the book keys
-
-**Implemented — milestone 2, `x/exchange`**
-
-- Persistent markets, orders, available/locked balances, and fee-collector balances
-- Place, cancel, and bounded expiration
-- Reservation, maker-price settlement, buy price improvement, and cumulative maker/taker fees
-- Trades, order and trade sequences, command nonces, and exchange revision
-- Atomic place/cancel via a Cosmos SDK cache context
-
-**Implemented — milestone 3, runnable chain**
-
-- `cosmos-orderbookd` wires auth, bank, staking, genutil, consensus, and `x/exchange`
-- Deposit and withdrawal move bank coins through one exchange module account
-- `Msg` and query services, genesis, and CLI commands for orders, balances, the book, and trades
-
-**Implemented — milestone 4, `x/batch`**
-
-- One authorized submitter finalizes an ordered batch of signed place and cancel commands
-- Validators execute those commands through `x/exchange` in submitted order
-- The batch is atomic: a failed command rolls back earlier commands, nonces, and the batch record
-- `BatchID` identifies the ordered batch. It is not an exchange state root
-
-**Implemented — milestone 5, batch commitments**
-
-- `ResultsHash` commits the ordered command results
-- `BatchCommitment` chains each finalized batch to the previous commitment
-- Batch 1 names 32 zero bytes as the previous commitment
-- A mismatched previous commitment is rejected and leaves the head unchanged
-- The commitment binds the batch, its results, the revisions, and the execution height. It is not an exchange state root, a validity proof, or a fraud proof
-
-**Implemented — milestone 6, off-chain sequencer**
-
-- `orderbook-sequencer` admits owner-signed place and cancel commands
-- One writer assigns a monotonic position and appends it to a local journal before admission succeeds
-- The oldest pending commands become `MsgFinalizeBatch` and are signed by the configured submitter
-- A command is finalized only after the chain includes the batch
-- Admission is provisional. It is not execution and it is not chain acceptance
-
-**Implemented — milestone 7, observability and benchmarks**
-
-- Prometheus text on the sequencer `GET /metrics` endpoint
-- Exchange and batch execution counters that cannot change a committed result
-- Matcher, order-book storage, batch-execution, and journal benchmarks
-- CPU and heap profiles through `go test -cpuprofile` and `-memprofile`
-- Bounded retry delay after a failed batch broadcast
-
-**Implemented — milestone 8, multi-validator checks**
-
-- `scripts/localnet4.sh` starts four validators from one genesis
-- Test digests of exchange and batch state. They are not consensus commitments
-- Explicit exchange, custody, and batch invariant checks
-- Failure injection, replay, property, and resource-limit tests
-
-**Implemented — milestone 9, genesis round trip**
-
-- Resting orders, locked balances, fee grosses, sequences, and trades export and import
-- Book, owner, client, and expiration indexes are rebuilt during genesis init
-- The batch commitment head is preserved, so the next batch extends the same chain
-
-**Planned**
-
-- Websocket feeds
+- Deterministic CLOB and price-time matching. The matcher does not import the SDK.
+- Reservation, maker-price settlement, buy price improvement, and cumulative maker/taker fees.
+- Bank-backed custody. Deposits and withdrawals move coins through one module account. Trades stay inside the exchange ledger.
+- Cosmos SDK messages and queries for markets, balances, orders, the book, trades, and the exchange revision.
+- One authorized submitter finalizes an ordered batch of owner-signed place and cancel commands. Validators execute the commands. The batch is atomic.
+- `BatchID`, `ResultsHash`, and `BatchCommitment`. The commitment chains each batch to the previous one. It is not an exchange state root, a validity proof, or a fraud proof.
+- Off-chain sequencer with durable admission order. `POST /v1/commands` is provisional. It is not execution and it is not chain inclusion.
+- Prometheus metrics, matcher and storage benchmarks, and bounded retry after a failed batch broadcast.
+- Four-validator localnet, invariant checks, failure injection, and deterministic replay.
+- Genesis export and import of the live book, balances, sequences, trades, and the batch commitment head.
+- Go client for queries, transactions, owner-signed sequencer commands, and committed-event streams.
 
 `pkg/matching` still does not import the SDK.
 
@@ -82,9 +40,7 @@ pkg/domain → pkg/arithmetic → pkg/matching
 pkg/canonical → pkg/domain
 ```
 
-The matcher returns a `MatchPlan`. It does not write state. Book order comes from the key layout: asks sort by ascending price, bids sort by `MaxUint64 - price`, and sequence breaks ties in favor of the older order. Details are in [docs/architecture.md](docs/architecture.md), [docs/matching-engine.md](docs/matching-engine.md), and [docs/state-layout.md](docs/state-layout.md).
-
-## Repository
+The matcher returns a `MatchPlan`. It does not write state. Asks sort by ascending price, bids sort by `MaxUint64 - price`, and sequence breaks ties in favor of the older order. Details are in [docs/architecture.md](docs/architecture.md), [docs/matching-engine.md](docs/matching-engine.md), and [docs/state-layout.md](docs/state-layout.md).
 
 ```text
 pkg/domain          orders, sides, sequence, nonce
@@ -98,32 +54,31 @@ app                 chain wiring
 cmd/cosmos-orderbookd
 cmd/orderbook-sequencer
 sequencer           admission, journal, batch building, chain submission
+client/go           queries, transactions, signed commands, event streams
 benchmarks          matcher benchmarks
 internal/telemetry  Prometheus recorders
 docs                architecture, matching, state layout
 ```
 
-## Matching example
+Ticks, not decimals. A buy of 100 lots at tick 1000 against asks of 30 @ 980, 40 @ 990, and 50 @ 1000 fills 30 @ 980, 40 @ 990, and 30 @ 1000. The incoming remainder is 0. The last maker keeps 20 lots and its original sequence. A UI can render tick 1000 as `10.00`. That rendering is not part of consensus.
 
-Ticks, not decimals. A buy of 100 lots at tick 1000 against asks of 30 @ 980, 40 @ 990, and 50 @ 1000 fills 30 @ 980, 40 @ 990, and 30 @ 1000. The incoming remainder is 0. The last maker keeps 20 lots and its original sequence.
-
-A UI can render tick 1000 as `10.00`. That rendering is not part of consensus. See [docs/architecture.md](docs/architecture.md).
-
-## Local node
+## Quick start
 
 ```bash
 make build
 ./scripts/localnet.sh
 ```
 
-The script initializes one validator, funds `alice` with `base` and `bob` with `quote`, and starts the node. Home defaults to `.localnet`. After the node is up:
+The script initializes one validator, funds `alice` with `base` and `bob` with `quote`, and starts the node. Home defaults to `.localnet`. Chain ID is `orderbook-1`. After the node is producing blocks:
 
 ```bash
 build/cosmos-orderbookd tx exchange deposit 1000base --from alice --chain-id orderbook-1 --keyring-backend test --home .localnet --fees 1stake -y
 build/cosmos-orderbookd q exchange markets --home .localnet
 ```
 
-Four validators use one genesis. Home defaults to `.localnet4`. RPC ports are `26657`, `26667`, `26677`, and `26687`. gRPC starts at `29290` and each later node adds 10.
+## Four validators
+
+`scripts/localnet4.sh` starts four validators from one genesis. Home defaults to `.localnet4`. RPC ports are `26657`, `26667`, `26677`, and `26687`. gRPC starts at `29290` and each later node adds 10.
 
 ```bash
 ./scripts/localnet4.sh
@@ -134,7 +89,21 @@ Four validators use one genesis. Home defaults to `.localnet4`. RPC ports are `2
 
 `smoke` deposits, matches one trade, and checks that the four nodes report the same exchange state. No batch is submitted, so each node reports the same empty batch head.
 
-## Sequencer
+## Direct order flow
+
+Deposits and withdrawals are normal transactions. Place and cancel use the account command nonce. The first accepted nonce is 1. The chain derives the order ID. A market order takes an explicit worst-price tick. It does not rest.
+
+```bash
+build/cosmos-orderbookd tx exchange deposit 1000base --from alice --chain-id orderbook-1 --keyring-backend test --home .localnet --fees 1stake -y
+build/cosmos-orderbookd tx exchange deposit 10000quote --from bob --chain-id orderbook-1 --keyring-backend test --home .localnet --fees 1stake -y
+build/cosmos-orderbookd tx exchange place-limit-order 1 sell 10 10 1 --from alice --chain-id orderbook-1 --keyring-backend test --home .localnet --fees 1stake -y
+build/cosmos-orderbookd tx exchange place-limit-order 1 buy 10 10 1 --from bob --chain-id orderbook-1 --keyring-backend test --home .localnet --fees 1stake -y
+build/cosmos-orderbookd q exchange trades 1 --home .localnet
+```
+
+`place-market-order` takes the same price argument as the worst acceptable tick.
+
+## Sequencer and batches
 
 `orderbook-sequencer` is off-chain. Validators still execute every command. `POST /v1/commands` returns `provisional: true` after the command is checked and written to the journal. That response does not mean the order executed or that the chain accepted it.
 
@@ -155,7 +124,45 @@ In another shell, after the node is producing blocks:
 
 `POST /v1/commands` takes one JSON command. `chain_id`, `exchange_instance_id`, and `owner` are text. `pub_key`, `signature`, and `cancel.order_id` are hex. The signature is over the canonical batch-command bytes, not over this JSON. `GET /health` reports pending and in-flight counts, the latest observed batch, and chain connectivity. `GET /metrics` is Prometheus text. `GET /v1/pending` lists commands that are not yet finalized.
 
-A failed broadcast waits `--retry-initial` (default 1s) before the next attempt. The wait doubles up to `--retry-max` (default 30s) and resets after a batch is included. The wait does not reorder commands. A command whose nonce the chain has already passed is dropped. Other commands, including an order rejected for insufficient balance, stay pending.
+A failed broadcast waits `--retry-initial` (default 1s) before the next attempt. The wait doubles up to `--retry-max` (default 30s) and resets after a batch is included. The wait does not reorder commands.
+
+## Go client
+
+`client/go` (package `orderbook`) is the external integration layer. A read-only client needs no key. Transaction signing uses a Cosmos SDK keyring signer. The client configuration does not hold a private key.
+
+```go
+client, err := orderbook.NewClient(orderbook.Config{
+    GRPCEndpoint: "127.0.0.1:9090",
+    RPCEndpoint:  "http://127.0.0.1:26657",
+    ChainID:      "orderbook-1",
+    Fees:         "1stake",
+})
+market, err := client.GetMarket(ctx, 1)
+trades, err := client.SubscribeTrades(ctx, 1)
+client.WithSigner(signer)
+_, err = client.PlaceLimitOrder(ctx, orderbook.LimitOrder{
+    MarketID: 1, Side: domain.SideBuy, TimeInForce: domain.TimeInForceGTC,
+    QuantityLots: 1, PriceTicks: 10, CommandNonce: 1,
+})
+```
+
+Prices and quantities on these calls are integers. `PlaceMarketOrder` requires `WorstPriceTicks`. The client does not invent an order ID. `SignPlaceOrder` and `SignCancelOrder` produce the canonical signed commands the sequencer and `x/batch` already verify. `SequencerClient.Submit` returns provisional admission.
+
+A short `main` is in `client/go/example`.
+
+## Events
+
+The client subscribes to CometBFT `NewBlock` and decodes events already emitted by `x/exchange` and `x/batch`:
+
+- `order_accepted`, `order_partially_filled`, `order_filled`, `order_cancelled`, `order_expired`
+- `trade_executed`
+- `batch_finalized`
+
+`SubscribeTrades` and `SubscribeOrders` take a market ID. `SubscribeBatches` does not. There is no subscription expression language.
+
+Events from one transaction stay in the order the module emitted them. Expiration events from the block are included with that block. The client does not sort by wall clock.
+
+Delivery across reconnects is at-least-once. A reconnect can show the same event again. `EventID` is the block height, the transaction hash when the event came from a transaction, and the event index. That is enough to deduplicate. The stream is not exactly-once, and it is not protocol state. A stalled subscriber is closed with `ErrSlowConsumer` instead of dropping events or blocking the node.
 
 ## Tests
 
@@ -166,6 +173,8 @@ go vet ./...
 ```
 
 `make check` runs all three. Fuzz targets are included; `go test` executes their seed corpus. A longer run is `go test -fuzz=FuzzMatchReplay -fuzztime=10s ./pkg/matching`.
+
+The client end-to-end test starts an in-process chain. It does not need a manually started node.
 
 ## Benchmarks
 
@@ -201,6 +210,16 @@ One measurement on this machine, Go 1.27.1, darwin/arm64, Apple M5 Max:
 | batch keeper, 10,000 resting places, one sample | 1.06 s, 120,159 KV reads, 80,000 KV writes |
 | journal append, one record, with fsync | 3.44 ms/op |
 | journal frame encode, no fsync | 111 ns/op |
+
+## Security model and limitations
+
+Validators re-execute every transaction and every batch. The batch commitment binds a batch to the previous commitment and to its command results. It does not prove the full exchange state.
+
+One genesis address may submit batches. The off-chain sequencer uses that key. Admission order is local journal order. It is not a decentralized sequencer and it is not consensus order until the chain includes the batch.
+
+Event streams observe committed results. They do not decide fills, balances, fees, or batch order. Reconnects can duplicate events.
+
+There is no fraud proof, validity proof, data-availability proof, or production deployment guidance in this repository.
 
 ## License
 
