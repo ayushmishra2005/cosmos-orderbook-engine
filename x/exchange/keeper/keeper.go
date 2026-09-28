@@ -22,6 +22,7 @@ type Keeper struct {
 	instanceID      []byte
 	bank            BankKeeper
 	failBeforeWrite error
+	hook            *testHook
 }
 
 // NewKeeper binds the exchange store. chainID and instanceID are inputs to
@@ -40,7 +41,7 @@ func NewKeeper(svc store.KVStoreService, chainID string, instanceID []byte) (Kee
 	}); err != nil {
 		return Keeper{}, err
 	}
-	return Keeper{store: svc, chainID: chainID, instanceID: copied}, nil
+	return Keeper{store: svc, chainID: chainID, instanceID: copied, hook: &testHook{}}, nil
 }
 
 // WithBank attaches the bank keeper used by deposit and withdrawal.
@@ -61,6 +62,9 @@ func (k Keeper) commit(ctx context.Context, fn func(sdk.Context) error) error {
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	cacheCtx, write := sdkCtx.CacheContext()
 	if err := fn(cacheCtx); err != nil {
+		return err
+	}
+	if err := k.fail(FailBeforeCommit); err != nil {
 		return err
 	}
 	if k.failBeforeWrite != nil {

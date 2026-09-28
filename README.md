@@ -56,6 +56,13 @@ The project goal is a serious Cosmos SDK central limit order book: integer ticks
 - CPU and heap profiles through `go test -cpuprofile` and `-memprofile`
 - Bounded retry delay after a failed batch broadcast
 
+**Implemented — milestone 8, multi-validator checks**
+
+- `scripts/localnet4.sh` starts four validators from one genesis
+- Test digests of exchange and batch state. They are not consensus commitments
+- Explicit exchange, custody, and batch invariant checks
+- Failure injection, replay, property, and resource-limit tests
+
 **Planned**
 
 - Websocket feeds
@@ -109,6 +116,17 @@ The script initializes one validator, funds `alice` with `base` and `bob` with `
 build/cosmos-orderbookd tx exchange deposit 1000base --from alice --chain-id orderbook-1 --keyring-backend test --home .localnet --fees 1stake -y
 build/cosmos-orderbookd q exchange markets --home .localnet
 ```
+
+Four validators use one genesis. Home defaults to `.localnet4`. RPC ports are `26657`, `26667`, `26677`, and `26687`. gRPC starts at `29290` and each later node adds 10.
+
+```bash
+./scripts/localnet4.sh
+./scripts/localnet4.sh stop
+./scripts/localnet4.sh reset
+./scripts/localnet4.sh smoke
+```
+
+`smoke` deposits, matches one trade, and checks that the four nodes report the same exchange state. No batch is submitted, so each node reports the same empty batch head.
 
 ## Sequencer
 

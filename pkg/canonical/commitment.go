@@ -107,6 +107,73 @@ func EncodeCommandResult(r Result) ([]byte, error) {
 	return dst, nil
 }
 
+// DecodeCommandResult reverses EncodeCommandResult.
+// A trade count that does not fit in the remaining buffer is rejected.
+func DecodeCommandResult(bz []byte) (Result, error) {
+	r := byteReader{b: bz}
+	index, err := r.u32()
+	if err != nil {
+		return Result{}, ErrInvalidResult
+	}
+	typ, err := r.u8()
+	if err != nil {
+		return Result{}, ErrInvalidResult
+	}
+	owner, err := r.prefixed()
+	if err != nil {
+		return Result{}, ErrInvalidResult
+	}
+	rawID, err := r.raw(32)
+	if err != nil {
+		return Result{}, ErrInvalidResult
+	}
+	var id domain.OrderID
+	copy(id[:], rawID)
+	status, err := r.u8()
+	if err != nil {
+		return Result{}, ErrInvalidResult
+	}
+	remaining, err := r.u64()
+	if err != nil {
+		return Result{}, ErrInvalidResult
+	}
+	count, err := r.u64()
+	if err != nil {
+		return Result{}, ErrInvalidResult
+	}
+	if count > uint64(r.left())/16 {
+		return Result{}, ErrInvalidResult
+	}
+	trades := make([]ResultTrade, 0, count)
+	for i := uint64(0); i < count; i++ {
+		market, err := r.u64()
+		if err != nil {
+			return Result{}, ErrInvalidResult
+		}
+		seq, err := r.u64()
+		if err != nil {
+			return Result{}, ErrInvalidResult
+		}
+		trades = append(trades, ResultTrade{MarketID: domain.MarketID(market), Sequence: seq})
+	}
+	if r.left() != 0 {
+		return Result{}, ErrInvalidResult
+	}
+	out := Result{
+		Index:     index,
+		Type:      CommandType(typ),
+		Owner:     owner,
+		OrderID:   id,
+		Status:    status,
+		Remaining: remaining,
+		Trades:    trades,
+	}
+	if _, err := EncodeCommandResult(out); err != nil {
+		return Result{}, err
+	}
+	return out, nil
+}
+
 // HashResults is SHA-256 over the ordered command results.
 // The digest is not an exchange state root.
 //

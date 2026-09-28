@@ -2,6 +2,7 @@ bin/
 build/
 .tools/
 .localnet/
+.localnet4/
 dist/
 *.exe
 *.test

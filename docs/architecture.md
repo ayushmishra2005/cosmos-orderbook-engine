@@ -106,8 +106,16 @@ Admission metrics, batch timings, and the retry delay are local to the sequencer
 
 `GET /health` reports pending and in-flight counts, the latest observed batch number, and whether the last chain call succeeded. `GET /metrics` serves Prometheus text. Neither response is an input to matching, fees, ordering, batch hashes, or state writes. A metrics recorder that panics is ignored. Wall-clock samples used for histograms are not written to the store.
 
+## Checks
+
+`CheckInvariants` and `CheckCustody` read the store and return an error. They do not write, and they do not repair a bad key. `StateDigestForTest` and `SnapshotDigest` hash KV pairs in key order so tests can compare validators. The digest is not a batch commitment, a state root, or a proof.
+
+A fee-collector balance is one of the internal balances. Custody is the sum of available and locked atoms, including that balance. The exchange module account's bank balance must cover the sum. It may be larger. Trades do not move bank coins.
+
+`scripts/localnet4.sh` runs four CometBFT validators on one genesis. Each validator executes the same transactions. Wall-clock samples used by metrics are not inputs to that execution.
+
 ## Application
 
-`cosmos-orderbookd` is a single-validator CometBFT chain. Deposits move bank coins from the user to the exchange module account and credit available balance. Withdrawals do the reverse and cannot spend locked balance. Both run in one cache, so a bank failure does not leave the internal ledger changed. Trades move atoms only inside the exchange ledger. The module account's bank balance for each registered denom must cover the sum of available and locked balances.
+`cosmos-orderbookd` can run as one validator or as the four-validator local network. Deposits move bank coins from the user to the exchange module account and credit available balance. Withdrawals do the reverse and cannot spend locked balance. Both run in one cache, so a bank failure does not leave the internal ledger changed. Trades move atoms only inside the exchange ledger. The module account's bank balance for each registered denom must cover the sum of available and locked balances.
 
 Genesis may register assets, markets, sequences, and the exchange revision. An internal balance is accepted only when that module custody already holds the coins. The usual local chain funds bank accounts in genesis and deposits after start. The order ID instance is `orderbook-v1`. Clients do not choose a new order's ID.

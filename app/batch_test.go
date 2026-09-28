@@ -385,14 +385,16 @@ func TestDeterministicReplay(t *testing.T) {
 }
 
 type replaySnap struct {
-	Revision uint64
-	OrderSeq [2]uint64
-	TradeSeq [2]uint64
-	Nonces   []uint64
-	Bals     []exchangetypes.Balance
-	Orders   []string
-	Trades   []string
-	Batches  []batchtypes.Batch
+	Revision       uint64
+	OrderSeq       [2]uint64
+	TradeSeq       [2]uint64
+	Nonces         []uint64
+	Bals           []exchangetypes.Balance
+	Orders         []string
+	Trades         []string
+	Batches        []batchtypes.Batch
+	ExchangeDigest [32]byte
+	BatchDigest    [32]byte
 }
 
 type replayFixture struct {
@@ -662,5 +664,11 @@ func snapshotReplay(t *testing.T, application *App, fx replayFixture) replaySnap
 		require.NoError(t, err)
 		snap.Batches = append(snap.Batches, batch)
 	}
+	snap.ExchangeDigest, err = application.Keeper.SnapshotDigest(ctx)
+	require.NoError(t, err)
+	snap.BatchDigest, err = application.BatchKeeper.SnapshotDigest(ctx)
+	require.NoError(t, err)
+	require.NoError(t, application.Keeper.CheckInvariants(ctx))
+	require.NoError(t, application.BatchKeeper.CheckInvariants(ctx))
 	return snap
 }

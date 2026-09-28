@@ -2,6 +2,7 @@ package canonical
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/domain"
 )
@@ -99,6 +100,185 @@ func CommandSignBytes(cmd Command) ([]byte, error) {
 	dst = append(dst, byte(cmd.Type))
 	dst = append(dst, body...)
 	return dst, nil
+}
+
+// DecodeCommandSignBytes reverses CommandSignBytes.
+// PubKey and Signature are not part of the signing bytes.
+// A length that does not fit in the buffer is rejected. It does not allocate it.
+func DecodeCommandSignBytes(bz []byte) (Command, error) {
+	r := byteReader{b: bz}
+	domainBytes, err := r.prefixed()
+	if err != nil {
+		return Command{}, err
+	}
+	if string(domainBytes) != BatchCommandDomain {
+		return Command{}, ErrInvalidCommand
+	}
+	version, err := r.u32()
+	if err != nil {
+		return Command{}, err
+	}
+	if version != BatchCommandVersion {
+		return Command{}, ErrUnsupportedVersion
+	}
+	chain, err := r.prefixed()
+	if err != nil {
+		return Command{}, err
+	}
+	instance, err := r.prefixed()
+	if err != nil {
+		return Command{}, err
+	}
+	owner, err := r.prefixed()
+	if err != nil {
+		return Command{}, err
+	}
+	nonce, err := r.u64()
+	if err != nil {
+		return Command{}, err
+	}
+	typ, err := r.u8()
+	if err != nil {
+		return Command{}, err
+	}
+	cmd := Command{
+		ProtocolVersion:    version,
+		ChainID:            string(chain),
+		ExchangeInstanceID: instance,
+		Owner:              owner,
+		Nonce:              nonce,
+		Type:               CommandType(typ),
+	}
+	switch cmd.Type {
+	case CommandTypePlace:
+		place, err := r.place()
+		if err != nil {
+			return Command{}, err
+		}
+		cmd.Place = &place
+	case CommandTypeCancel:
+		raw, err := r.raw(32)
+		if err != nil {
+			return Command{}, err
+		}
+		var id domain.OrderID
+		copy(id[:], raw)
+		if id.IsZero() {
+			return Command{}, domain.ErrInvalidOrderID
+		}
+		cmd.Cancel = &Cancel{OrderID: id}
+	default:
+		return Command{}, ErrInvalidCommand
+	}
+	if r.left() != 0 {
+		return Command{}, ErrInvalidCommand
+	}
+	if _, err := CommandSignBytes(cmd); err != nil {
+		return Command{}, err
+	}
+	return cmd, nil
+}
+
+type byteReader struct {
+	b []byte
+	i int
+}
+
+func (r *byteReader) left() int {
+	return len(r.b) - r.i
+}
+
+func (r *byteReader) u8() (byte, error) {
+	if r.left() < 1 {
+		return 0, ErrInvalidCommand
+	}
+	v := r.b[r.i]
+	r.i++
+	return v, nil
+}
+
+func (r *byteReader) u32() (uint32, error) {
+	if r.left() < 4 {
+		return 0, ErrInvalidCommand
+	}
+	v := binary.BigEndian.Uint32(r.b[r.i : r.i+4])
+	r.i += 4
+	return v, nil
+}
+
+func (r *byteReader) u64() (uint64, error) {
+	if r.left() < 8 {
+		return 0, ErrInvalidCommand
+	}
+	v := binary.BigEndian.Uint64(r.b[r.i : r.i+8])
+	r.i += 8
+	return v, nil
+}
+
+func (r *byteReader) raw(n int) ([]byte, error) {
+	if n < 0 || r.left() < n {
+		return nil, ErrInvalidCommand
+	}
+	out := make([]byte, n)
+	copy(out, r.b[r.i:r.i+n])
+	r.i += n
+	return out, nil
+}
+
+func (r *byteReader) prefixed() ([]byte, error) {
+	n, err := r.u64()
+	if err != nil {
+		return nil, err
+	}
+	if n > uint64(r.left()) {
+		return nil, ErrInvalidCommand
+	}
+	return r.raw(int(n))
+}
+
+func (r *byteReader) place() (Place, error) {
+	market, err := r.u64()
+	if err != nil {
+		return Place{}, err
+	}
+	side, err := r.u8()
+	if err != nil {
+		return Place{}, err
+	}
+	typ, err := r.u8()
+	if err != nil {
+		return Place{}, err
+	}
+	tif, err := r.u8()
+	if err != nil {
+		return Place{}, err
+	}
+	qty, err := r.u64()
+	if err != nil {
+		return Place{}, err
+	}
+	price, err := r.u64()
+	if err != nil {
+		return Place{}, err
+	}
+	expiry, err := r.u64()
+	if err != nil {
+		return Place{}, err
+	}
+	client, err := r.prefixed()
+	if err != nil {
+		return Place{}, err
+	}
+	return Place{
+		MarketID:      domain.MarketID(market),
+		Side:          domain.Side(side),
+		Type:          domain.OrderType(typ),
+		TimeInForce:   domain.TimeInForce(tif),
+		Quantity:      domain.Quantity(qty),
+		Price:         domain.Price(price),
+		ExpiryHeight:  expiry,
+		ClientOrderID: client,
+	}, nil
 }
 
 func commandBody(cmd Command) ([]byte, error) {

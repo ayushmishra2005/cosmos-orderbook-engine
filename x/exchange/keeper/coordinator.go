@@ -127,6 +127,9 @@ func (k Keeper) place(ctx sdk.Context, cmd types.PlaceOrderCommand, stats *place
 	if err := k.requireReserve(ctx, market, order); err != nil {
 		return executionPlan{}, err
 	}
+	if err := k.fail(FailAfterReserve); err != nil {
+		return executionPlan{}, err
+	}
 
 	src, err := k.openBook(ctx, market.ID, opposite(order.Side))
 	if err != nil {
@@ -147,6 +150,9 @@ func (k Keeper) place(ctx sdk.Context, cmd types.PlaceOrderCommand, stats *place
 		return executionPlan{}, err
 	}
 	if err := assertNotCrossed(src, order, matched); err != nil {
+		return executionPlan{}, err
+	}
+	if err := k.fail(FailAfterMatch); err != nil {
 		return executionPlan{}, err
 	}
 	// Close before any write. Close is idempotent with the defer.
@@ -221,18 +227,30 @@ func opposite(side domain.Side) domain.Side {
 }
 
 func (k Keeper) apply(ctx sdk.Context, plan executionPlan) error {
+	if err := k.fail(FailBeforeBook); err != nil {
+		return err
+	}
 	kv, err := k.kv(ctx)
 	if err != nil {
 		return err
+	}
+	updated := false
+	noteUpdate := func() error {
+		if updated {
+			return nil
+		}
+		updated = true
+		return k.fail(FailDuringOrderUpdate)
 	}
 	for _, maker := range plan.makers {
 		if maker.remove {
 			if err := k.removeResting(ctx, maker.order); err != nil {
 				return err
 			}
-			continue
+		} else if err := k.putActive(ctx, maker.order); err != nil {
+			return err
 		}
-		if err := k.putActive(ctx, maker.order); err != nil {
+		if err := noteUpdate(); err != nil {
 			return err
 		}
 	}
@@ -249,12 +267,16 @@ func (k Keeper) apply(ctx sdk.Context, plan executionPlan) error {
 				return err
 			}
 		}
+		if err := noteUpdate(); err != nil {
+			return err
+		}
 	}
 	for _, bal := range plan.balances {
 		if err := k.setBalance(ctx, bal.owner, bal.asset, bal.bal); err != nil {
 			return err
 		}
 	}
+	wroteTrade := false
 	for _, trade := range plan.trades {
 		key, err := canonical.EncodeTradeKey(trade.MarketID, trade.Sequence)
 		if err != nil {
@@ -266,6 +288,12 @@ func (k Keeper) apply(ctx sdk.Context, plan executionPlan) error {
 		}
 		if err := kv.Set(key, bz); err != nil {
 			return err
+		}
+		if !wroteTrade {
+			wroteTrade = true
+			if err := k.fail(FailDuringTrade); err != nil {
+				return err
+			}
 		}
 	}
 	if plan.setOrderSequence {
@@ -286,7 +314,13 @@ func (k Keeper) apply(ctx sdk.Context, plan executionPlan) error {
 			return err
 		}
 	}
+	if err := k.fail(FailBeforeNonce); err != nil {
+		return err
+	}
 	if err := k.acceptNonce(ctx, plan.owner, plan.nonce); err != nil {
+		return err
+	}
+	if err := k.fail(FailBeforeRevision); err != nil {
 		return err
 	}
 	if err := k.setUint64(ctx, canonical.EncodeExchangeRevisionKey(), plan.revision); err != nil {
@@ -350,13 +384,25 @@ func (k Keeper) cancel(ctx sdk.Context, cmd types.CancelOrderCommand) (types.Can
 	if err != nil {
 		return types.CancelResult{}, err
 	}
+	if err := k.fail(FailBeforeBook); err != nil {
+		return types.CancelResult{}, err
+	}
 	if err := k.setBalance(ctx, owner, asset, bal); err != nil {
 		return types.CancelResult{}, err
 	}
 	if err := k.removeResting(ctx, order); err != nil {
 		return types.CancelResult{}, err
 	}
+	if err := k.fail(FailDuringOrderUpdate); err != nil {
+		return types.CancelResult{}, err
+	}
+	if err := k.fail(FailBeforeNonce); err != nil {
+		return types.CancelResult{}, err
+	}
 	if err := k.acceptNonce(ctx, owner, cmd.CommandNonce); err != nil {
+		return types.CancelResult{}, err
+	}
+	if err := k.fail(FailBeforeRevision); err != nil {
 		return types.CancelResult{}, err
 	}
 	if err := k.bumpRevision(ctx); err != nil {

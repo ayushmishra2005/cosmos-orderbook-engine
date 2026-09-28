@@ -3,6 +3,7 @@ package keeper
 import (
 	"bytes"
 	"context"
+	"errors"
 	"time"
 
 	"cosmossdk.io/core/store"
@@ -18,6 +19,9 @@ import (
 	exchangetypes "github.com/ayushmishra2005/cosmos-orderbook-engine/x/exchange/types"
 )
 
+// errInjected aborts a batch in tests. Production leaves the hooks unset.
+var errInjected = errors.New("batch: injected failure")
+
 // Exchange is the exchange surface a batch may call.
 // The batch does not match, reserve, or settle.
 type Exchange interface {
@@ -28,10 +32,16 @@ type Exchange interface {
 }
 
 // Keeper executes ordered batches against the exchange.
+//
+// failAfterCommands, failBeforeRecord, and failBeforeWrite are test hooks.
+// Production leaves them unset. A hit returns before the batch cache is written.
 type Keeper struct {
-	store   store.KVStoreService
-	chainID string
-	ex      Exchange
+	store             store.KVStoreService
+	chainID           string
+	ex                Exchange
+	failAfterCommands int
+	failBeforeRecord  bool
+	failBeforeWrite   error
 }
 
 // NewKeeper binds the batch store. chainID is the chain the commands must name.
@@ -79,6 +89,9 @@ func (k Keeper) commit(ctx context.Context, fn func(sdk.Context) error) error {
 	cacheCtx, write := sdkCtx.CacheContext()
 	if err := fn(cacheCtx); err != nil {
 		return err
+	}
+	if k.failBeforeWrite != nil {
+		return k.failBeforeWrite
 	}
 	write()
 	return nil
@@ -149,6 +162,9 @@ func (k Keeper) finalize(ctx sdk.Context, msg *v1.MsgFinalizeBatch) (types.Batch
 		}
 		result.Index = uint32(i)
 		results[i] = result
+		if k.failAfterCommands > 0 && i+1 == k.failAfterCommands {
+			return types.Batch{}, errInjected
+		}
 	}
 	post, err := k.ex.GetRevision(ctx)
 	if err != nil {
@@ -180,6 +196,9 @@ func (k Keeper) finalize(ctx sdk.Context, msg *v1.MsgFinalizeBatch) (types.Batch
 	}
 	batch.ResultsHash = resultsHash
 	batch.Commitment = commitment
+	if k.failBeforeRecord {
+		return types.Batch{}, errInjected
+	}
 	if err := k.storeBatch(ctx, batch); err != nil {
 		return types.Batch{}, err
 	}

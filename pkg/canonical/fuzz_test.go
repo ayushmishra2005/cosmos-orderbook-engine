@@ -151,3 +151,118 @@ func FuzzBatchCommitment(f *testing.F) {
 }
 
 const mathMax = ^uint64(0)
+
+func FuzzCommandSignBytes(f *testing.F) {
+	f.Add([]byte{0x01, 0x02, 0xff})
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_, _ = DecodeCommandSignBytes(data)
+	})
+}
+
+func FuzzCommandSignBytesRoundTrip(f *testing.F) {
+	f.Add("orderbook-test", []byte("orderbook-v1"), bytes.Repeat([]byte{0x22}, 20), uint64(1), uint64(1), uint64(3), uint64(9), "client")
+	f.Fuzz(func(t *testing.T, chain string, instance, owner []byte, nonce, market, qty, price uint64, client string) {
+		if chain == "" || len(chain) > maxChainIDLen || len(instance) == 0 || len(instance) > maxInstanceIDLen {
+			return
+		}
+		if len(owner) == 0 || len(owner) > domain.MaxOwnerLength || market == 0 || qty == 0 || price == 0 {
+			return
+		}
+		if len(client) > MaxClientOrderIDLength {
+			client = client[:MaxClientOrderIDLength]
+		}
+		cmd := Command{
+			ProtocolVersion:    BatchCommandVersion,
+			ChainID:            chain,
+			ExchangeInstanceID: append([]byte(nil), instance...),
+			Owner:              append([]byte(nil), owner...),
+			Nonce:              nonce,
+			Type:               CommandTypePlace,
+			Place: &Place{
+				MarketID: domain.MarketID(market), Side: domain.SideBuy, Type: domain.OrderTypeLimit,
+				TimeInForce: domain.TimeInForceGTC, Quantity: domain.Quantity(qty), Price: domain.Price(price),
+				ClientOrderID: []byte(client),
+			},
+		}
+		bz, err := CommandSignBytes(cmd)
+		if err != nil {
+			return
+		}
+		got, err := DecodeCommandSignBytes(bz)
+		if err != nil {
+			t.Fatal(err)
+		}
+		again, err := CommandSignBytes(got)
+		if err != nil || !bytes.Equal(bz, again) {
+			t.Fatal(err)
+		}
+	})
+}
+
+func FuzzDecodeCommandResult(f *testing.F) {
+	owner := bytes.Repeat([]byte{0x11}, 20)
+	var id domain.OrderID
+	id[0] = 1
+	body, err := EncodeCommandResult(Result{
+		Index: 0, Type: CommandTypeCancel, Owner: owner, OrderID: id, Status: ResultCancelled,
+	})
+	if err != nil {
+		panic(err)
+	}
+	f.Add(body)
+	f.Add([]byte{0xff, 0xff, 0xff, 0xff})
+	f.Fuzz(func(t *testing.T, data []byte) {
+		got, err := DecodeCommandResult(data)
+		if err != nil {
+			return
+		}
+		again, err := EncodeCommandResult(got)
+		if err != nil || !bytes.Equal(data, again) {
+			t.Fatal(err)
+		}
+	})
+}
+
+func FuzzStateKeyRoundTrip(f *testing.F) {
+	f.Add(bytes.Repeat([]byte{0x33}, 20), uint64(1), uint64(4), uint64(2), uint64(9))
+	f.Fuzz(func(t *testing.T, owner []byte, market, price, sequence, expiry uint64) {
+		if len(owner) == 0 || len(owner) > domain.MaxOwnerLength || market == 0 {
+			return
+		}
+		var id domain.OrderID
+		id[0] = 7
+		key, err := EncodeOwnerOpenOrderKey(owner, domain.MarketID(market), id)
+		if err != nil {
+			return
+		}
+		gotOwner, gotMarket, gotID, err := DecodeOwnerOpenOrderKey(key)
+		if err != nil || !bytes.Equal(gotOwner, owner) || gotMarket != domain.MarketID(market) || gotID != id {
+			t.Fatal(err)
+		}
+		if price == 0 || sequence == 0 {
+			return
+		}
+		ask, err := EncodeAskKey(domain.MarketID(market), domain.Price(price), domain.Sequence(sequence))
+		if err != nil {
+			t.Fatal(err)
+		}
+		prefix, err := AskMarketPrefix(domain.MarketID(market))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.HasPrefix(ask, prefix) {
+			t.Fatal("ask left its market prefix")
+		}
+		if expiry == 0 {
+			return
+		}
+		exp, err := EncodeExpirationKey(expiry, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotExpiry, gotExpID, err := DecodeExpirationKey(exp)
+		if err != nil || gotExpiry != expiry || gotExpID != id {
+			t.Fatal(err)
+		}
+	})
+}

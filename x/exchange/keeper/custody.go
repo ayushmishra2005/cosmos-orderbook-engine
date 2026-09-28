@@ -51,6 +51,9 @@ func (k Keeper) deposit(ctx sdk.Context, owner sdk.AccAddress, coin sdk.Coin) er
 	if err := k.bank.SendCoinsFromAccountToModule(ctx, owner, types.ModuleName, sdk.NewCoins(sdk.NewCoin(coin.Denom, sdkmath.NewIntFromUint64(amount)))); err != nil {
 		return err
 	}
+	if err := k.fail(FailAfterBankDeposit); err != nil {
+		return err
+	}
 	bal, err := k.GetBalance(ctx, owner, asset.ID)
 	if err != nil {
 		return err
@@ -60,6 +63,9 @@ func (k Keeper) deposit(ctx sdk.Context, owner sdk.AccAddress, coin sdk.Coin) er
 		return err
 	}
 	if err := k.setBalance(ctx, owner, asset.ID, bal); err != nil {
+		return err
+	}
+	if err := k.fail(FailBeforeRevision); err != nil {
 		return err
 	}
 	if err := k.bumpRevision(ctx); err != nil {
@@ -97,7 +103,13 @@ func (k Keeper) withdraw(ctx sdk.Context, owner sdk.AccAddress, coin sdk.Coin) e
 	if err := k.setBalance(ctx, owner, asset.ID, bal); err != nil {
 		return err
 	}
+	if err := k.fail(FailBeforeBankWithdraw); err != nil {
+		return err
+	}
 	if err := k.bank.SendCoinsFromModuleToAccount(ctx, types.ModuleName, owner, sdk.NewCoins(sdk.NewCoin(coin.Denom, sdkmath.NewIntFromUint64(amount)))); err != nil {
+		return err
+	}
+	if err := k.fail(FailBeforeRevision); err != nil {
 		return err
 	}
 	if err := k.bumpRevision(ctx); err != nil {

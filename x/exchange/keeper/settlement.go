@@ -417,6 +417,9 @@ func (k Keeper) settle(ctx sdk.Context, market types.Market, taker domain.Order,
 	if err != nil {
 		return executionPlan{}, err
 	}
+	if err := k.fail(FailDuringSettle); err != nil {
+		return executionPlan{}, err
+	}
 	return out, nil
 }
 
