@@ -40,6 +40,8 @@ func run(args []string) error {
 	home := fs.String("home", env("ORDERBOOK_HOME", ".localnet"), "node home used for the keyring")
 	maxBatch := fs.Int("max-batch", envInt("ORDERBOOK_MAX_BATCH", 100), "maximum commands in one batch")
 	interval := fs.Duration("batch-interval", envDuration("ORDERBOOK_BATCH_INTERVAL", 2*time.Second), "batch submission interval")
+	retryInitial := fs.Duration("retry-initial", envDuration("ORDERBOOK_RETRY_INITIAL", time.Second), "initial delay after a failed batch submission")
+	retryMax := fs.Duration("retry-max", envDuration("ORDERBOOK_RETRY_MAX", 30*time.Second), "maximum delay after a failed batch submission")
 	maxBytes := fs.Int("max-command-bytes", envInt("ORDERBOOK_MAX_COMMAND_BYTES", 8192), "maximum encoded command size")
 	fees := fs.String("fees", env("ORDERBOOK_FEES", "1stake"), "submitter transaction fee")
 	gas := fs.Uint64("gas", envUint("ORDERBOOK_GAS", 2_000_000), "submitter transaction gas limit")
@@ -80,6 +82,8 @@ func run(args []string) error {
 		MaxCommandBytes: *maxBytes,
 		MaxBatch:        *maxBatch,
 		BatchInterval:   *interval,
+		RetryInitial:    *retryInitial,
+		RetryMax:        *retryMax,
 	}, chain)
 	if err != nil {
 		return err

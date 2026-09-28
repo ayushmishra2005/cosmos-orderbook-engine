@@ -1,6 +1,7 @@
 package sequencer
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"testing"
@@ -125,5 +126,77 @@ func TestInFlightReplayReturnsPending(t *testing.T) {
 	}
 	if svc.NextPosition() != 2 {
 		t.Fatalf("next %d", svc.NextPosition())
+	}
+}
+
+// Append benchmarks include the production fsync. Encode measures framing only.
+
+func BenchmarkJournalAppend(b *testing.B) {
+	j := benchJournal(b)
+	cmd := benchEncoded(b)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := j.append(record{Position: uint64(i + 1), Status: statusPending, Command: cmd}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkJournalAppend100(b *testing.B) {
+	j := benchJournal(b)
+	cmd := benchEncoded(b)
+	b.ReportAllocs()
+	b.ResetTimer()
+	var pos uint64 = 1
+	for i := 0; i < b.N; i++ {
+		recs := make([]record, 100)
+		for n := range recs {
+			recs[n] = record{Position: pos, Status: statusPending, Command: cmd}
+			pos++
+		}
+		if err := j.appendMany(recs); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkJournalEncode(b *testing.B) {
+	cmd := benchEncoded(b)
+	rec := record{Position: 1, Status: statusPending, Command: cmd}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var buf bytes.Buffer
+		if err := writeRecord(&buf, rec); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkJournalReplay1000(b *testing.B) {
+	benchReplay(b, 1000)
+}
+
+func BenchmarkJournalReplay10000(b *testing.B) {
+	benchReplay(b, 10_000)
+}
+
+func benchReplay(b *testing.B, n int) {
+	j := benchJournal(b)
+	cmd := benchEncoded(b)
+	recs := make([]record, n)
+	for i := range recs {
+		recs[i] = record{Position: uint64(i + 1), Status: statusPending, Command: cmd}
+	}
+	if err := j.appendMany(recs); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := j.replay(); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

@@ -2,9 +2,12 @@ package app
 
 import (
 	"bytes"
+	"encoding/hex"
+	"fmt"
 	"testing"
 
 	sdkmath "cosmossdk.io/math"
+	"github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/stretchr/testify/require"
 
@@ -361,4 +364,303 @@ func requireResults(t *testing.T, application *App, batch batchtypes.Batch) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, batchtypes.BatchCommitment(cm), batch.Commitment)
+}
+
+// TestDeterministicReplay runs one multi-trader, multi-market fixture twice
+// from identical genesis and compares keeper state, not event text.
+func TestDeterministicReplay(t *testing.T) {
+	fx := newReplayFixture()
+	a := runReplay(t, fx)
+	b := runReplay(t, fx)
+	require.Equal(t, a, b)
+	require.Greater(t, a.Revision, uint64(0))
+	require.Len(t, a.Batches, 3)
+	require.NotZero(t, a.TradeSeq[0])
+	require.NotEmpty(t, a.Orders)
+	require.False(t, a.Batches[0].ID.IsZero())
+	require.False(t, a.Batches[0].ResultsHash.IsZero())
+	require.False(t, a.Batches[0].Commitment.IsZero())
+	require.Equal(t, a.Batches[0].Commitment, a.Batches[1].Previous)
+	require.Equal(t, a.Batches[1].Commitment, a.Batches[2].Previous)
+}
+
+type replaySnap struct {
+	Revision uint64
+	OrderSeq [2]uint64
+	TradeSeq [2]uint64
+	Nonces   []uint64
+	Bals     []exchangetypes.Balance
+	Orders   []string
+	Trades   []string
+	Batches  []batchtypes.Batch
+}
+
+type replayFixture struct {
+	makers []trader
+	taker  trader
+	sub    trader
+}
+
+func newReplayFixture() replayFixture {
+	makers := make([]trader, 8)
+	for i := range makers {
+		makers[i] = replayTrader(byte(i + 1))
+	}
+	return replayFixture{makers: makers, taker: replayTrader(20), sub: replayTrader(21)}
+}
+
+func replayTrader(n byte) trader {
+	var secret [32]byte
+	secret[31] = n
+	priv := secp256k1.GenPrivKeyFromSecret(secret[:])
+	return trader{priv: priv, addr: sdk.AccAddress(priv.PubKey().Address())}
+}
+
+func runReplay(t *testing.T, fx replayFixture) replaySnap {
+	t.Helper()
+	accounts := []funded{{fx.sub, coins("stake", 1_000_000_000_000)}}
+	for _, m := range fx.makers {
+		accounts = append(accounts, funded{m, coins("stake", 1_000_000_000_000, "base", 1000, "quote", 1000)})
+	}
+	accounts = append(accounts, funded{fx.taker, coins("stake", 1_000_000_000_000, "quote", 100_000)})
+	application := startReplayApp(t, accounts, fx.sub.addr)
+
+	for _, m := range fx.makers {
+		deliver(t, application, m.priv, &exchangev1.MsgDeposit{
+			Owner: m.addr.String(), Amount: sdk.NewInt64Coin("base", 1000),
+		}, true)
+		deliver(t, application, m.priv, &exchangev1.MsgDeposit{
+			Owner: m.addr.String(), Amount: sdk.NewInt64Coin("quote", 1000),
+		}, true)
+	}
+	deliver(t, application, fx.taker.priv, &exchangev1.MsgDeposit{
+		Owner: fx.taker.addr.String(), Amount: sdk.NewInt64Coin("quote", 100_000),
+	}, true)
+
+	for _, batch := range replayBatches(t, fx) {
+		ctx := application.NewContext(true)
+		rev, err := application.Keeper.GetRevision(ctx)
+		require.NoError(t, err)
+		var prev []byte
+		if batch.number == 1 {
+			prev = make([]byte, 32)
+		} else {
+			got, err := application.BatchKeeper.GetBatch(ctx, batch.number-1)
+			require.NoError(t, err)
+			prev = append([]byte(nil), got.Commitment[:]...)
+		}
+		deliver(t, application, fx.sub.priv, &batchv1.MsgFinalizeBatch{
+			Submitter:                fx.sub.addr.String(),
+			BatchNumber:              batch.number,
+			ExpectedExchangeRevision: rev,
+			PreviousBatchCommitment:  prev,
+			Commands:                 batch.cmds,
+		}, true)
+	}
+	return snapshotReplay(t, application, fx)
+}
+
+func startReplayApp(t *testing.T, accounts []funded, submitter sdk.AccAddress) *App {
+	t.Helper()
+	application, err := buildAppFull(t, accounts, func(gs *exchangev1.GenesisState) {
+		gs.Markets = append(gs.Markets, &exchangev1.Market{
+			Id: 2, BaseAssetId: 1, QuoteAssetId: 2,
+			BaseLotSize: 1, QuoteAtomsPerTickPerLot: 1,
+			MaxMakerVisits: 64, Enabled: true,
+		})
+	}, func(gs *batchv1.GenesisState) {
+		gs.Submitter = submitter.String()
+	})
+	require.NoError(t, err)
+	return application
+}
+
+type replayBatch struct {
+	number uint64
+	cmds   []*batchv1.SignedCommand
+}
+
+func replayBatches(t *testing.T, fx replayFixture) []replayBatch {
+	t.Helper()
+	var b1, b2, b3 []*batchv1.SignedCommand
+	for _, m := range fx.makers {
+		for k := uint64(1); k <= 8; k++ {
+			b1 = append(b1, replayPlace(t, m, k, 1, exchangev1.Side_SIDE_SELL, 3, 20))
+		}
+	}
+	for _, m := range fx.makers {
+		for k := uint64(0); k < 8; k++ {
+			b1 = append(b1, replayPlace(t, m, 9+k, 1, exchangev1.Side_SIDE_BUY, 1, 10))
+		}
+	}
+	for n := uint64(1); n <= 64; n++ {
+		b2 = append(b2, replayPlace(t, fx.taker, n, 1, exchangev1.Side_SIDE_BUY, 1, 20))
+	}
+	for i := 0; i < 4; i++ {
+		m := fx.makers[i]
+		for k := uint64(0); k < 8; k++ {
+			id := replayOrderID(t, m.addr, 1, 9+k)
+			b2 = append(b2, replayCancel(t, m, 17+k, id))
+		}
+	}
+	for i := 4; i < 8; i++ {
+		m := fx.makers[i]
+		for k := uint64(0); k < 8; k++ {
+			b2 = append(b2, replayPlace(t, m, 17+k, 2, exchangev1.Side_SIDE_SELL, 1, 40))
+		}
+	}
+	for n := uint64(65); n <= 96; n++ {
+		b3 = append(b3, replayPlace(t, fx.taker, n, 1, exchangev1.Side_SIDE_BUY, 1, 20))
+	}
+	for i := 4; i < 8; i++ {
+		m := fx.makers[i]
+		for k := uint64(0); k < 4; k++ {
+			id := replayOrderID(t, m.addr, 1, 9+k)
+			b3 = append(b3, replayCancel(t, m, 25+k, id))
+		}
+	}
+	for i := 0; i < 4; i++ {
+		m := fx.makers[i]
+		for k := uint64(0); k < 4; k++ {
+			b3 = append(b3, replayPlace(t, m, 25+k, 2, exchangev1.Side_SIDE_BUY, 1, 5))
+		}
+	}
+	require.Len(t, b1, 128)
+	require.Len(t, b2, 128)
+	require.Len(t, b3, 64)
+	return []replayBatch{{1, b1}, {2, b2}, {3, b3}}
+}
+
+func replayPlace(t *testing.T, tr trader, nonce, market uint64, side exchangev1.Side, qty, price uint64) *batchv1.SignedCommand {
+	t.Helper()
+	cmd, _ := replaySign(t, tr, canonical.Command{
+		ProtocolVersion:    canonical.BatchCommandVersion,
+		ChainID:            testChainID,
+		ExchangeInstanceID: []byte(exchangev1.DefaultInstanceID),
+		Owner:              tr.addr,
+		Nonce:              nonce,
+		Type:               canonical.CommandTypePlace,
+		Place: &canonical.Place{
+			MarketID: domain.MarketID(market), Side: domain.Side(side),
+			Type: domain.OrderTypeLimit, TimeInForce: domain.TimeInForceGTC,
+			Quantity: domain.Quantity(qty), Price: domain.Price(price),
+		},
+	})
+	return cmd
+}
+
+func replayCancel(t *testing.T, tr trader, nonce uint64, id domain.OrderID) *batchv1.SignedCommand {
+	t.Helper()
+	cmd, _ := replaySign(t, tr, canonical.Command{
+		ProtocolVersion:    canonical.BatchCommandVersion,
+		ChainID:            testChainID,
+		ExchangeInstanceID: []byte(exchangev1.DefaultInstanceID),
+		Owner:              tr.addr,
+		Nonce:              nonce,
+		Type:               canonical.CommandTypeCancel,
+		Cancel:             &canonical.Cancel{OrderID: id},
+	})
+	return cmd
+}
+
+func replaySign(t *testing.T, tr trader, cmd canonical.Command) (*batchv1.SignedCommand, canonical.Command) {
+	t.Helper()
+	cmd.PubKey = tr.priv.PubKey().Bytes()
+	bz, err := canonical.CommandSignBytes(cmd)
+	require.NoError(t, err)
+	sig, err := tr.priv.Sign(bz)
+	require.NoError(t, err)
+	cmd.Signature = sig
+	pb := &batchv1.SignedCommand{
+		ProtocolVersion:    cmd.ProtocolVersion,
+		ChainId:            cmd.ChainID,
+		ExchangeInstanceId: append([]byte(nil), cmd.ExchangeInstanceID...),
+		Owner:              tr.addr.String(),
+		CommandNonce:       cmd.Nonce,
+		PubKey:             append([]byte(nil), cmd.PubKey...),
+		Signature:          sig,
+	}
+	switch cmd.Type {
+	case canonical.CommandTypePlace:
+		pb.CommandType = batchv1.CommandType_COMMAND_TYPE_PLACE_ORDER
+		pb.Place = &batchv1.Place{
+			MarketId: uint64(cmd.Place.MarketID), Side: batchv1.Side(cmd.Place.Side),
+			OrderType: batchv1.OrderType_ORDER_TYPE_LIMIT, TimeInForce: batchv1.TimeInForce_TIME_IN_FORCE_GTC,
+			QuantityLots: uint64(cmd.Place.Quantity), PriceTicks: uint64(cmd.Place.Price),
+		}
+	case canonical.CommandTypeCancel:
+		pb.CommandType = batchv1.CommandType_COMMAND_TYPE_CANCEL_ORDER
+		pb.Cancel = &batchv1.Cancel{OrderId: append([]byte(nil), cmd.Cancel.OrderID[:]...)}
+	default:
+		t.Fatal(cmd.Type)
+	}
+	return pb, cmd
+}
+
+func replayOrderID(t *testing.T, owner sdk.AccAddress, market, nonce uint64) domain.OrderID {
+	t.Helper()
+	id, err := canonical.HashOrderID(canonical.OrderIDInput{
+		ChainID: testChainID, ExchangeInstanceID: []byte(exchangev1.DefaultInstanceID),
+		Owner: owner, MarketID: domain.MarketID(market), CommandNonce: nonce,
+	})
+	require.NoError(t, err)
+	return id
+}
+
+func snapshotReplay(t *testing.T, application *App, fx replayFixture) replaySnap {
+	t.Helper()
+	ctx := application.NewContext(true)
+	rev, err := application.Keeper.GetRevision(ctx)
+	require.NoError(t, err)
+	var snap replaySnap
+	snap.Revision = rev
+	traders := append(append([]trader{}, fx.makers...), fx.taker)
+	for i, market := range []domain.MarketID{1, 2} {
+		seq, err := application.Keeper.GetOrderSequence(ctx, market)
+		require.NoError(t, err)
+		tradeSeq, err := application.Keeper.GetTradeSequence(ctx, market)
+		require.NoError(t, err)
+		snap.OrderSeq[i] = seq
+		snap.TradeSeq[i] = tradeSeq
+		for n := uint64(1); n <= tradeSeq; n++ {
+			trade, err := application.Keeper.GetTrade(ctx, market, n)
+			require.NoError(t, err)
+			snap.Trades = append(snap.Trades, fmt.Sprintf("%d %d %d %d %d %d %x %x %x %x",
+				trade.MarketID, trade.Sequence, trade.Price, trade.Quantity, trade.BaseAmount, trade.QuoteAmount,
+				trade.MakerOrderID[:], trade.TakerOrderID[:], trade.Buyer, trade.Seller))
+		}
+	}
+	qs := exchangekeeper.NewQueryServer(application.Keeper)
+	for _, tr := range traders {
+		nonce, err := application.Keeper.GetCommandNonce(ctx, tr.addr)
+		require.NoError(t, err)
+		snap.Nonces = append(snap.Nonces, nonce)
+		for _, asset := range []domain.AssetID{1, 2} {
+			snap.Bals = append(snap.Bals, mustBal(t, application, tr.addr, asset))
+		}
+		for _, market := range []uint64{1, 2} {
+			var off uint64
+			for pages := 0; pages < 8; pages++ {
+				res, err := qs.OpenOrders(ctx, &exchangev1.QueryOpenOrdersRequest{
+					Owner: tr.addr.String(), MarketId: market, Offset: off, Limit: 100,
+				})
+				require.NoError(t, err)
+				for _, order := range res.Orders {
+					snap.Orders = append(snap.Orders, fmt.Sprintf("%s %s %d %d %d %d %d",
+						hex.EncodeToString(order.OrderId), order.Owner, order.MarketId, order.Side,
+						order.PriceTicks, order.RemainingLots, order.Sequence))
+				}
+				if res.NextOffset == 0 || res.NextOffset == off {
+					break
+				}
+				off = res.NextOffset
+			}
+		}
+	}
+	for n := uint64(1); n <= 3; n++ {
+		batch, err := application.BatchKeeper.GetBatch(ctx, n)
+		require.NoError(t, err)
+		snap.Batches = append(snap.Batches, batch)
+	}
+	return snap
 }

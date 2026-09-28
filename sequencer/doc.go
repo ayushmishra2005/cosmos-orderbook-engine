@@ -3,4 +3,5 @@
 // that order in a journal. Validators still execute commands and settle trades.
 // An admission response is provisional until the chain finalizes the batch.
 // Validators remain authoritative for fills and settlement.
+// Metrics, health, and retry delays are process-local. They do not reorder commands.
 package sequencer

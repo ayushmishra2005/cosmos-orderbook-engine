@@ -124,6 +124,48 @@ func (m *memChain) NextNonce(_ context.Context, owner []byte) (uint64, error) {
 	return 1, nil
 }
 
+func benchJournal(b *testing.B) *Journal {
+	b.Helper()
+	j, _, err := openJournal(filepath.Join(b.TempDir(), "journal"))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { _ = j.Close() })
+	return j
+}
+
+func benchEncoded(b *testing.B) []byte {
+	b.Helper()
+	priv := secp256k1.GenPrivKey()
+	cmd := canonical.Command{
+		ProtocolVersion:    canonical.BatchCommandVersion,
+		ChainID:            "orderbook-test",
+		ExchangeInstanceID: []byte("orderbook-v1"),
+		Owner:              sdk.AccAddress(priv.PubKey().Address()),
+		Nonce:              1,
+		Type:               canonical.CommandTypePlace,
+		Place: &canonical.Place{
+			MarketID: 1, Side: domain.SideBuy, Type: domain.OrderTypeLimit,
+			TimeInForce: domain.TimeInForceGTC, Quantity: 1, Price: 10,
+		},
+		PubKey: priv.PubKey().Bytes(),
+	}
+	bz, err := canonical.CommandSignBytes(cmd)
+	if err != nil {
+		b.Fatal(err)
+	}
+	sig, err := priv.Sign(bz)
+	if err != nil {
+		b.Fatal(err)
+	}
+	cmd.Signature = sig
+	encoded, err := encodeSigned(cmd)
+	if err != nil {
+		b.Fatal(err)
+	}
+	return encoded
+}
+
 func (m *memChain) Submit(_ context.Context, msg *batchv1.MsgFinalizeBatch) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

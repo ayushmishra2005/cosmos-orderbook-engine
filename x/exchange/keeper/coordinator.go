@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
+	"github.com/ayushmishra2005/cosmos-orderbook-engine/internal/telemetry"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/arithmetic"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/canonical"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/domain"
@@ -14,13 +16,21 @@ import (
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/x/exchange/types"
 )
 
+// placeStats holds wall durations for telemetry. It is not consensus state.
+type placeStats struct {
+	match  time.Duration
+	settle time.Duration
+	fills  int
+}
+
 // PlaceOrder validates, matches, and settles one command.
 // The child cache is written only after the execution plan checks out.
 // Expiry uses the block height, not the header timestamp.
 func (k Keeper) PlaceOrder(ctx context.Context, cmd types.PlaceOrderCommand) (types.PlaceResult, error) {
 	var result types.PlaceResult
+	var stats placeStats
 	err := k.commit(ctx, func(ctx sdk.Context) error {
-		plan, err := k.place(ctx, cmd)
+		plan, err := k.place(ctx, cmd, &stats)
 		if err != nil {
 			return err
 		}
@@ -39,10 +49,11 @@ func (k Keeper) PlaceOrder(ctx context.Context, cmd types.PlaceOrderCommand) (ty
 	if err != nil {
 		return types.PlaceResult{}, err
 	}
+	telemetry.RecordPlace(stats.fills, stats.match, stats.settle)
 	return result, nil
 }
 
-func (k Keeper) place(ctx sdk.Context, cmd types.PlaceOrderCommand) (executionPlan, error) {
+func (k Keeper) place(ctx sdk.Context, cmd types.PlaceOrderCommand, stats *placeStats) (executionPlan, error) {
 	height, err := executionHeight(ctx)
 	if err != nil {
 		return executionPlan{}, err
@@ -123,11 +134,15 @@ func (k Keeper) place(ctx sdk.Context, cmd types.PlaceOrderCommand) (executionPl
 	}
 	defer src.Close()
 
+	matchStart := time.Now()
 	matched, err := matching.Match(src, matching.MatchInput{
 		Incoming:        order,
 		ExecutionHeight: height,
 		MaxMakerVisits:  market.MaxMakerVisits,
 	})
+	if stats != nil {
+		stats.match = time.Since(matchStart)
+	}
 	if err != nil {
 		return executionPlan{}, err
 	}
@@ -148,7 +163,12 @@ func (k Keeper) place(ctx sdk.Context, cmd types.PlaceOrderCommand) (executionPl
 	default:
 		return executionPlan{}, types.ErrSettlement
 	}
+	settleStart := time.Now()
 	plan, err := k.settle(ctx, market, order, matched)
+	if stats != nil {
+		stats.settle = time.Since(settleStart)
+		stats.fills = len(plan.trades)
+	}
 	if err != nil {
 		return executionPlan{}, err
 	}
@@ -287,6 +307,7 @@ func (k Keeper) CancelOrder(ctx context.Context, cmd types.CancelOrderCommand) (
 	if err != nil {
 		return types.CancelResult{}, err
 	}
+	telemetry.RecordCancel()
 	return result, nil
 }
 

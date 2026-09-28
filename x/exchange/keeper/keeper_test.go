@@ -2,12 +2,18 @@ package keeper
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"math"
+	"sync/atomic"
 	"testing"
 
 	"cosmossdk.io/core/store"
+	"cosmossdk.io/log/v2"
+	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
+	dbm "github.com/cosmos/cosmos-db"
 	"github.com/cosmos/cosmos-sdk/runtime"
+	sdkstore "github.com/cosmos/cosmos-sdk/store/v2"
 	storetypes "github.com/cosmos/cosmos-sdk/store/v2/types"
 	"github.com/cosmos/cosmos-sdk/testutil"
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -1021,3 +1027,424 @@ func TestPartialBuyPriceImprovement(t *testing.T) {
 	}
 	requireNotCrossed(t, k, ctx)
 }
+
+// Storage benchmarks measure the Cosmos-backed order book. They are not chain throughput.
+
+func BenchmarkStorage(b *testing.B) {
+	b.Run("Insert", benchStorageInsert)
+	b.Run("Lookup", benchStorageLookup)
+	b.Run("BestAsk", benchStorageBestAsk)
+	b.Run("BestBid", benchStorageBestBid)
+	b.Run("Cancel", benchStorageCancel)
+	b.Run("PartialFill", benchStoragePartial)
+	b.Run("FullFill", benchStorageFull)
+	b.Run("BookQuery", benchStorageBookQuery)
+	b.Run("Match/10", func(b *testing.B) { benchStorageMatch(b, 10) })
+	b.Run("Match/100", func(b *testing.B) { benchStorageMatch(b, 100) })
+	b.Run("Match/1000", func(b *testing.B) { benchStorageMatch(b, 1000) })
+}
+
+type storageEnv struct {
+	k      Keeper
+	ctx    sdk.Context
+	counts *benchCounts
+	maker  []byte
+	taker  []byte
+}
+
+func newStorageEnv(b *testing.B) storageEnv {
+	b.Helper()
+	db := dbm.NewMemDB()
+	cms := sdkstore.NewCommitMultiStore(db, log.NewNopLogger())
+	key := storetypes.NewKVStoreKey("exchange")
+	cms.MountStoreWithDB(key, storetypes.StoreTypeIAVL, db)
+	if err := cms.LoadLatestVersion(); err != nil {
+		b.Fatal(err)
+	}
+	ctx := sdk.NewContext(cms, cmtproto.Header{Height: 10, ChainID: "testing"}, false, log.NewNopLogger())
+	counts := &benchCounts{}
+	k, err := NewKeeper(counts.Wrap(runtime.NewKVStoreService(key)), "testing", []byte{0, 0, 0, 0, 0, 0, 0, 1})
+	if err != nil {
+		b.Fatal(err)
+	}
+	market := testMarket(0, 0)
+	market.MaxMakerVisits = 2048
+	if err := k.CreateMarket(ctx, market); err != nil {
+		b.Fatal(err)
+	}
+	env := storageEnv{
+		k: k, ctx: ctx, counts: counts,
+		maker: bytesRepeat(1), taker: bytesRepeat(2),
+	}
+	env.fund(b, env.maker, baseAsset, 10_000_000)
+	env.fund(b, env.maker, quoteAsset, 10_000_000)
+	env.fund(b, env.taker, baseAsset, 10_000_000)
+	env.fund(b, env.taker, quoteAsset, 10_000_000)
+	return env
+}
+
+func (e storageEnv) fund(b *testing.B, owner []byte, asset domain.AssetID, amount uint64) {
+	b.Helper()
+	key, err := canonical.EncodeBalanceKey(owner, asset)
+	if err != nil {
+		b.Fatal(err)
+	}
+	kv, err := e.k.kv(e.ctx)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := kv.Set(key, types.EncodeBalance(types.Balance{Available: amount})); err != nil {
+		b.Fatal(err)
+	}
+}
+
+func (e storageEnv) place(b *testing.B, ctx sdk.Context, owner []byte, nonce uint64, side domain.Side, price, qty uint64) types.PlaceResult {
+	b.Helper()
+	res, err := e.k.PlaceOrder(ctx, types.PlaceOrderCommand{
+		Owner: owner, MarketID: marketID, Side: side,
+		Type: domain.OrderTypeLimit, TimeInForce: domain.TimeInForceGTC,
+		Price: domain.Price(price), Quantity: domain.Quantity(qty), CommandNonce: nonce,
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	return res
+}
+
+func benchStorageInsert(b *testing.B) {
+	env := newStorageEnv(b)
+	cmd := types.PlaceOrderCommand{
+		Owner: env.taker, MarketID: marketID, Side: domain.SideBuy,
+		Type: domain.OrderTypeLimit, TimeInForce: domain.TimeInForceGTC,
+		Price: 10, Quantity: 1, CommandNonce: 1,
+	}
+	env.counts.Reset()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		cache, _ := env.ctx.CacheContext()
+		if _, err := env.k.PlaceOrder(cache, cmd); err != nil {
+			b.Fatal(err)
+		}
+	}
+	reportKV(b, env.counts)
+}
+
+func benchStorageLookup(b *testing.B) {
+	env := newStorageEnv(b)
+	res := env.place(b, env.ctx, env.maker, 1, domain.SideSell, 100, 1)
+	env.counts.Reset()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := env.k.GetOrder(env.ctx, res.OrderID); err != nil {
+			b.Fatal(err)
+		}
+	}
+	reportKV(b, env.counts)
+}
+
+func benchStorageBestAsk(b *testing.B) {
+	env := newStorageEnv(b)
+	env.place(b, env.ctx, env.maker, 1, domain.SideSell, 100, 1)
+	env.place(b, env.ctx, env.maker, 2, domain.SideSell, 110, 1)
+	benchBest(b, env, domain.SideSell)
+}
+
+func benchStorageBestBid(b *testing.B) {
+	env := newStorageEnv(b)
+	env.place(b, env.ctx, env.maker, 1, domain.SideBuy, 90, 1)
+	env.place(b, env.ctx, env.maker, 2, domain.SideBuy, 80, 1)
+	benchBest(b, env, domain.SideBuy)
+}
+
+func benchBest(b *testing.B, env storageEnv, side domain.Side) {
+	env.counts.Reset()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		src, err := env.k.openBook(env.ctx, marketID, side)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if _, ok, err := src.Peek(); err != nil || !ok {
+			src.Close()
+			b.Fatalf("best %v %v", ok, err)
+		}
+		if err := src.Close(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	reportKV(b, env.counts)
+}
+
+func benchStorageCancel(b *testing.B) {
+	env := newStorageEnv(b)
+	res := env.place(b, env.ctx, env.maker, 1, domain.SideBuy, 10, 1)
+	cmd := types.CancelOrderCommand{Owner: env.maker, OrderID: res.OrderID, CommandNonce: 2}
+	env.counts.Reset()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		cache, _ := env.ctx.CacheContext()
+		if _, err := env.k.CancelOrder(cache, cmd); err != nil {
+			b.Fatal(err)
+		}
+	}
+	reportKV(b, env.counts)
+}
+
+func benchStoragePartial(b *testing.B) {
+	env := newStorageEnv(b)
+	env.place(b, env.ctx, env.maker, 1, domain.SideSell, 100, 10)
+	cmd := types.PlaceOrderCommand{
+		Owner: env.taker, MarketID: marketID, Side: domain.SideBuy,
+		Type: domain.OrderTypeLimit, TimeInForce: domain.TimeInForceGTC,
+		Price: 100, Quantity: 4, CommandNonce: 1,
+	}
+	env.counts.Reset()
+	b.ReportAllocs()
+	b.ResetTimer()
+	var fills int
+	for i := 0; i < b.N; i++ {
+		cache, _ := env.ctx.CacheContext()
+		res, err := env.k.PlaceOrder(cache, cmd)
+		if err != nil {
+			b.Fatal(err)
+		}
+		fills += len(res.Fills)
+	}
+	reportKV(b, env.counts)
+	if b.N > 0 {
+		b.ReportMetric(float64(fills)/float64(b.N), "fills/op")
+	}
+}
+
+func benchStorageFull(b *testing.B) {
+	env := newStorageEnv(b)
+	env.place(b, env.ctx, env.maker, 1, domain.SideSell, 100, 10)
+	cmd := types.PlaceOrderCommand{
+		Owner: env.taker, MarketID: marketID, Side: domain.SideBuy,
+		Type: domain.OrderTypeLimit, TimeInForce: domain.TimeInForceGTC,
+		Price: 100, Quantity: 10, CommandNonce: 1,
+	}
+	env.counts.Reset()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		cache, _ := env.ctx.CacheContext()
+		res, err := env.k.PlaceOrder(cache, cmd)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(res.Fills) != 1 || res.Remaining != 0 {
+			b.Fatalf("full fill %+v", res)
+		}
+	}
+	reportKV(b, env.counts)
+}
+
+func benchStorageBookQuery(b *testing.B) {
+	env := newStorageEnv(b)
+	other := testMarket(0, 0)
+	other.ID = 2
+	other.MaxMakerVisits = 64
+	if err := env.k.CreateMarket(env.ctx, other); err != nil {
+		b.Fatal(err)
+	}
+	for i := 0; i < 200; i++ {
+		env.place(b, env.ctx, env.maker, uint64(i+1), domain.SideBuy, uint64(200-i), 1)
+	}
+	// Orders on another market must not be visited by a market 1 query.
+	for i := 0; i < 50; i++ {
+		if _, err := env.k.PlaceOrder(env.ctx, types.PlaceOrderCommand{
+			Owner: env.taker, MarketID: 2, Side: domain.SideSell,
+			Type: domain.OrderTypeLimit, TimeInForce: domain.TimeInForceGTC,
+			Price: domain.Price(100 + i), Quantity: 1, CommandNonce: uint64(i + 1),
+		}); err != nil {
+			b.Fatal(err)
+		}
+	}
+	probe, err := env.k.listBook(env.ctx, marketID, domain.SideBuy, 0, 50)
+	if err != nil || len(probe) != 50 {
+		b.Fatalf("probe %d %v", len(probe), err)
+	}
+	env.counts.Reset()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		got, err := env.k.listBook(env.ctx, marketID, domain.SideBuy, 0, 50)
+		if err != nil || len(got) != 50 {
+			b.Fatalf("book %d %v", len(got), err)
+		}
+	}
+	reportKV(b, env.counts)
+}
+
+func benchStorageMatch(b *testing.B, n int) {
+	env := newStorageEnv(b)
+	for i := 0; i < n; i++ {
+		env.place(b, env.ctx, env.maker, uint64(i+1), domain.SideSell, 100, 1)
+	}
+	cmd := types.PlaceOrderCommand{
+		Owner: env.taker, MarketID: marketID, Side: domain.SideBuy,
+		Type: domain.OrderTypeLimit, TimeInForce: domain.TimeInForceGTC,
+		Price: 100, Quantity: domain.Quantity(n), CommandNonce: 1,
+	}
+	check, _ := env.ctx.CacheContext()
+	res, err := env.k.PlaceOrder(check, cmd)
+	if err != nil || len(res.Fills) != n {
+		b.Fatalf("fills %d err %v", len(res.Fills), err)
+	}
+	env.counts.Reset()
+	b.ReportAllocs()
+	b.ResetTimer()
+	var fills int
+	for i := 0; i < b.N; i++ {
+		cache, _ := env.ctx.CacheContext()
+		res, err := env.k.PlaceOrder(cache, cmd)
+		if err != nil {
+			b.Fatal(err)
+		}
+		fills += len(res.Fills)
+	}
+	reportKV(b, env.counts)
+	if b.N > 0 {
+		b.ReportMetric(float64(fills)/float64(b.N), "fills/op")
+	}
+}
+
+func reportKV(b *testing.B, c *benchCounts) {
+	if b.N == 0 {
+		return
+	}
+	b.ReportMetric(float64(c.Reads())/float64(b.N), "kv_reads/op")
+	b.ReportMetric(float64(c.Writes())/float64(b.N), "kv_writes/op")
+}
+
+func bytesRepeat(b byte) []byte {
+	out := make([]byte, 20)
+	for i := range out {
+		out[i] = b
+	}
+	return out
+}
+
+type benchCounts struct {
+	reads  atomic.Uint64
+	writes atomic.Uint64
+}
+
+// Reset zeroes the counters.
+func (c *benchCounts) Reset() {
+	if c == nil {
+		return
+	}
+	c.reads.Store(0)
+	c.writes.Store(0)
+}
+
+// Reads is the number of Get, Has, and iterator entries observed.
+func (c *benchCounts) Reads() uint64 {
+	if c == nil {
+		return 0
+	}
+	return c.reads.Load()
+}
+
+// Writes is the number of Set and Delete calls.
+func (c *benchCounts) Writes() uint64 {
+	if c == nil {
+		return 0
+	}
+	return c.writes.Load()
+}
+
+// Wrap counts operations on the store opened from inner.
+func (c *benchCounts) Wrap(inner store.KVStoreService) store.KVStoreService {
+	if c == nil || inner == nil {
+		return inner
+	}
+	return benchService{inner: inner, c: c}
+}
+
+type benchService struct {
+	inner store.KVStoreService
+	c     *benchCounts
+}
+
+func (s benchService) OpenKVStore(ctx context.Context) store.KVStore {
+	return benchKV{inner: s.inner.OpenKVStore(ctx), c: s.c}
+}
+
+type benchKV struct {
+	inner store.KVStore
+	c     *benchCounts
+}
+
+func (k benchKV) Get(key []byte) ([]byte, error) {
+	k.c.reads.Add(1)
+	return k.inner.Get(key)
+}
+
+func (k benchKV) Has(key []byte) (bool, error) {
+	k.c.reads.Add(1)
+	return k.inner.Has(key)
+}
+
+func (k benchKV) Set(key, value []byte) error {
+	k.c.writes.Add(1)
+	return k.inner.Set(key, value)
+}
+
+func (k benchKV) Delete(key []byte) error {
+	k.c.writes.Add(1)
+	return k.inner.Delete(key)
+}
+
+func (k benchKV) Iterator(start, end []byte) (store.Iterator, error) {
+	it, err := k.inner.Iterator(start, end)
+	if err != nil || it == nil {
+		return it, err
+	}
+	return &benchIter{inner: it, c: k.c}, nil
+}
+
+func (k benchKV) ReverseIterator(start, end []byte) (store.Iterator, error) {
+	it, err := k.inner.ReverseIterator(start, end)
+	if err != nil || it == nil {
+		return it, err
+	}
+	return &benchIter{inner: it, c: k.c}, nil
+}
+
+type benchIter struct {
+	inner   store.Iterator
+	c       *benchCounts
+	counted bool
+}
+
+func (it *benchIter) note() {
+	if it.counted || !it.inner.Valid() {
+		return
+	}
+	it.counted = true
+	it.c.reads.Add(1)
+}
+
+func (it *benchIter) Domain() (start, end []byte) { return it.inner.Domain() }
+func (it *benchIter) Valid() bool                 { return it.inner.Valid() }
+func (it *benchIter) Next() {
+	it.inner.Next()
+	it.counted = false
+}
+func (it *benchIter) Key() []byte {
+	it.note()
+	return it.inner.Key()
+}
+func (it *benchIter) Value() []byte {
+	it.note()
+	return it.inner.Value()
+}
+func (it *benchIter) Error() error { return it.inner.Error() }
+func (it *benchIter) Close() error { return it.inner.Close() }

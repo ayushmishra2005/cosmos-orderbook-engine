@@ -2,9 +2,14 @@ package keeper
 
 import (
 	"bytes"
+	"context"
+	"encoding/binary"
 	"errors"
+	"fmt"
+	"sync/atomic"
 	"testing"
 
+	corestore "cosmossdk.io/core/store"
 	"cosmossdk.io/log/v2"
 	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
 	dbm "github.com/cosmos/cosmos-db"
@@ -49,7 +54,7 @@ type env struct {
 	instance []byte
 }
 
-func setup(t *testing.T) env {
+func setup(t testing.TB) env {
 	t.Helper()
 	db := dbm.NewMemDB()
 	cms := store.NewCommitMultiStore(db, log.NewNopLogger())
@@ -84,7 +89,7 @@ func setup(t *testing.T) env {
 	return env{ek: ek, bk: bk, ctx: ctx, exKey: exKey, sub: sub, instance: ek.InstanceID()}
 }
 
-func (e env) fund(t *testing.T, owner []byte, asset domain.AssetID, amount uint64) {
+func (e env) fund(t testing.TB, owner []byte, asset domain.AssetID, amount uint64) {
 	t.Helper()
 	key, err := canonical.EncodeBalanceKey(owner, asset)
 	if err != nil {
@@ -961,3 +966,395 @@ func hasEvent(ctx sdk.Context, typ string) bool {
 	}
 	return false
 }
+
+// Batch benchmarks time keeper execution of a deterministic command fixture.
+// A fixture larger than MaxCommands runs as successive atomic batches.
+// This is not the throughput of a committed CometBFT block.
+
+func TestBatchWorkloadFixtures(t *testing.T) {
+	for _, kind := range []string{"resting", "match", "mixed", "multimarket", "partial"} {
+		t.Run(kind, func(t *testing.T) {
+			e, _, cmds := prepareWorkload(t, kind, 8)
+			if err := executeCommands(e, e.ctx, cmds); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func BenchmarkBatch(b *testing.B) {
+	for _, n := range []int{100, 1000, 10_000} {
+		for _, kind := range []string{"resting", "match", "mixed", "multimarket", "partial"} {
+			b.Run(fmt.Sprintf("%s/%d", kind, n), func(b *testing.B) {
+				e, counts, cmds := prepareWorkload(b, kind, n)
+				counts.Reset()
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					outer, _ := e.ctx.CacheContext()
+					if err := executeCommands(e, outer, cmds); err != nil {
+						b.Fatal(err)
+					}
+				}
+				if b.N > 0 {
+					b.ReportMetric(float64(counts.Reads())/float64(b.N), "kv_reads/op")
+					b.ReportMetric(float64(counts.Writes())/float64(b.N), "kv_writes/op")
+				}
+			})
+		}
+	}
+}
+
+const benchFunds = uint64(1_000_000_000)
+
+func prepareWorkload(tb testing.TB, kind string, n int) (env, *benchCounts, []*v1.SignedCommand) {
+	tb.Helper()
+	if n < 1 {
+		tb.Fatalf("n %d", n)
+	}
+	e, counts := openBench(tb)
+	maker := detTrader(1)
+	taker := detTrader(2)
+	switch kind {
+	case "resting":
+		e.fund(tb, maker.addr, quoteAsset, benchFunds)
+		cmds := make([]*v1.SignedCommand, n)
+		for i := 0; i < n; i++ {
+			cmds[i] = signPlace(tb, e, maker, uint64(i+1), mkt, domain.SideBuy, 10, 1)
+		}
+		return e, counts, cmds
+	case "match":
+		if n%2 != 0 {
+			tb.Fatalf("match n %d", n)
+		}
+		e.fund(tb, maker.addr, baseAsset, benchFunds)
+		e.fund(tb, taker.addr, quoteAsset, benchFunds)
+		half := n / 2
+		cmds := make([]*v1.SignedCommand, n)
+		for i := 0; i < half; i++ {
+			cmds[i] = signPlace(tb, e, maker, uint64(i+1), mkt, domain.SideSell, 100, 1)
+			cmds[half+i] = signPlace(tb, e, taker, uint64(i+1), mkt, domain.SideBuy, 100, 1)
+		}
+		return e, counts, cmds
+	case "mixed":
+		if n%4 != 0 {
+			tb.Fatalf("mixed n %d", n)
+		}
+		e.fund(tb, maker.addr, baseAsset, benchFunds)
+		e.fund(tb, maker.addr, quoteAsset, benchFunds)
+		e.fund(tb, taker.addr, quoteAsset, benchFunds)
+		groups := n / 4
+		cmds := make([]*v1.SignedCommand, n)
+		for g := 0; g < groups; g++ {
+			askNonce := uint64(g*3 + 1)
+			bidNonce := uint64(g*3 + 2)
+			cancelNonce := uint64(g*3 + 3)
+			cmds[g*4] = signPlace(tb, e, maker, askNonce, mkt, domain.SideSell, 30, 1)
+			cmds[g*4+1] = signPlace(tb, e, taker, uint64(g+1), mkt, domain.SideBuy, 30, 1)
+			cmds[g*4+2] = signPlace(tb, e, maker, bidNonce, mkt, domain.SideBuy, 10, 1)
+			cmds[g*4+3] = signCancel(tb, e, maker, cancelNonce, benchOrderID(tb, e, maker.addr, mkt, bidNonce))
+		}
+		return e, counts, cmds
+	case "multimarket":
+		for id := domain.MarketID(2); id <= 4; id++ {
+			if err := e.ek.CreateMarket(e.ctx, exchangetypes.Market{
+				ID: id, BaseAssetID: baseAsset, QuoteAssetID: quoteAsset,
+				BaseLotSize: 1, QuoteAtomsPerTickPerLot: 1, MaxMakerVisits: 64, Enabled: true,
+			}); err != nil {
+				tb.Fatal(err)
+			}
+		}
+		e.fund(tb, maker.addr, quoteAsset, benchFunds)
+		cmds := make([]*v1.SignedCommand, n)
+		for i := 0; i < n; i++ {
+			market := domain.MarketID(i%4 + 1)
+			cmds[i] = signPlace(tb, e, maker, uint64(i+1), market, domain.SideBuy, 10, 1)
+		}
+		return e, counts, cmds
+	case "partial":
+		e.fund(tb, maker.addr, baseAsset, benchFunds)
+		e.fund(tb, taker.addr, quoteAsset, benchFunds)
+		cmds := make([]*v1.SignedCommand, n)
+		cmds[0] = signPlace(tb, e, maker, 1, mkt, domain.SideSell, 50, uint64(n))
+		for i := 1; i < n; i++ {
+			cmds[i] = signPlace(tb, e, taker, uint64(i), mkt, domain.SideBuy, 50, 1)
+		}
+		return e, counts, cmds
+	default:
+		tb.Fatalf("workload %s", kind)
+		return env{}, nil, nil
+	}
+}
+
+func executeCommands(e env, ctx sdk.Context, cmds []*v1.SignedCommand) error {
+	rev, err := e.ek.GetRevision(ctx)
+	if err != nil {
+		return err
+	}
+	params, err := e.bk.GetParams(ctx)
+	if err != nil {
+		return err
+	}
+	number := params.Latest + 1
+	prev := params.Head
+	for off := 0; off < len(cmds); off += types.MaxCommands {
+		end := off + types.MaxCommands
+		if end > len(cmds) {
+			end = len(cmds)
+		}
+		batch, err := e.bk.FinalizeBatch(ctx, &v1.MsgFinalizeBatch{
+			Submitter:                e.sub.addr.String(),
+			BatchNumber:              number,
+			ExpectedExchangeRevision: rev,
+			PreviousBatchCommitment:  append([]byte(nil), prev[:]...),
+			Commands:                 cmds[off:end],
+		})
+		if err != nil {
+			return fmt.Errorf("batch %d: %w", number, err)
+		}
+		rev = batch.PostRevision
+		prev = batch.Commitment
+		number++
+	}
+	return nil
+}
+
+func openBench(tb testing.TB) (env, *benchCounts) {
+	tb.Helper()
+	db := dbm.NewMemDB()
+	cms := store.NewCommitMultiStore(db, log.NewNopLogger())
+	exKey := storetypes.NewKVStoreKey("exchange")
+	batchKey := storetypes.NewKVStoreKey("batch")
+	tkey := storetypes.NewTransientStoreKey("transient")
+	cms.MountStoreWithDB(exKey, storetypes.StoreTypeIAVL, db)
+	cms.MountStoreWithDB(batchKey, storetypes.StoreTypeIAVL, db)
+	cms.MountStoreWithDB(tkey, storetypes.StoreTypeTransient, db)
+	if err := cms.LoadLatestVersion(); err != nil {
+		tb.Fatal(err)
+	}
+	ctx := sdk.NewContext(cms, cmtproto.Header{Height: 10, ChainID: chainID}, false, log.NewNopLogger())
+	counts := &benchCounts{}
+	ek, err := exchangekeeper.NewKeeper(counts.Wrap(runtime.NewKVStoreService(exKey)), chainID, []byte{0, 0, 0, 0, 0, 0, 0, 1})
+	if err != nil {
+		tb.Fatal(err)
+	}
+	bk, err := NewKeeper(runtime.NewKVStoreService(batchKey), chainID, ek)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	sub := detTrader(9)
+	if err := bk.InitGenesis(ctx, v1.GenesisState{Submitter: sub.addr.String()}); err != nil {
+		tb.Fatal(err)
+	}
+	if err := ek.CreateMarket(ctx, exchangetypes.Market{
+		ID: mkt, BaseAssetID: baseAsset, QuoteAssetID: quoteAsset,
+		BaseLotSize: 1, QuoteAtomsPerTickPerLot: 1, MaxMakerVisits: 64, Enabled: true,
+	}); err != nil {
+		tb.Fatal(err)
+	}
+	return env{ek: ek, bk: bk, ctx: ctx, exKey: exKey, sub: sub, instance: ek.InstanceID()}, counts
+}
+
+func detTrader(n int) trader {
+	var secret [32]byte
+	binary.BigEndian.PutUint64(secret[24:], uint64(n)+1)
+	priv := secp256k1.GenPrivKeyFromSecret(secret[:])
+	return trader{priv: priv, addr: sdk.AccAddress(priv.PubKey().Address())}
+}
+
+func signPlace(tb testing.TB, e env, tr trader, nonce uint64, market domain.MarketID, side domain.Side, price, qty uint64) *v1.SignedCommand {
+	tb.Helper()
+	return signCmd(tb, tr, canonical.Command{
+		ProtocolVersion:    canonical.BatchCommandVersion,
+		ChainID:            chainID,
+		ExchangeInstanceID: append([]byte(nil), e.instance...),
+		Owner:              tr.addr,
+		Nonce:              nonce,
+		Type:               canonical.CommandTypePlace,
+		Place: &canonical.Place{
+			MarketID: market, Side: side, Type: domain.OrderTypeLimit, TimeInForce: domain.TimeInForceGTC,
+			Quantity: domain.Quantity(qty), Price: domain.Price(price),
+		},
+	})
+}
+
+func signCancel(tb testing.TB, e env, tr trader, nonce uint64, id domain.OrderID) *v1.SignedCommand {
+	tb.Helper()
+	return signCmd(tb, tr, canonical.Command{
+		ProtocolVersion:    canonical.BatchCommandVersion,
+		ChainID:            chainID,
+		ExchangeInstanceID: append([]byte(nil), e.instance...),
+		Owner:              tr.addr,
+		Nonce:              nonce,
+		Type:               canonical.CommandTypeCancel,
+		Cancel:             &canonical.Cancel{OrderID: id},
+	})
+}
+
+func signCmd(tb testing.TB, tr trader, cmd canonical.Command) *v1.SignedCommand {
+	tb.Helper()
+	cmd.PubKey = tr.priv.PubKey().Bytes()
+	bz, err := canonical.CommandSignBytes(cmd)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	sig, err := tr.priv.Sign(bz)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	cmd.Signature = sig
+	pb := &v1.SignedCommand{
+		ProtocolVersion:    cmd.ProtocolVersion,
+		ChainId:            cmd.ChainID,
+		ExchangeInstanceId: append([]byte(nil), cmd.ExchangeInstanceID...),
+		Owner:              sdk.AccAddress(cmd.Owner).String(),
+		CommandNonce:       cmd.Nonce,
+		PubKey:             append([]byte(nil), cmd.PubKey...),
+		Signature:          append([]byte(nil), sig...),
+	}
+	switch cmd.Type {
+	case canonical.CommandTypePlace:
+		pb.CommandType = v1.CommandType_COMMAND_TYPE_PLACE_ORDER
+		pb.Place = &v1.Place{
+			MarketId: uint64(cmd.Place.MarketID), Side: sideProto(cmd.Place.Side),
+			OrderType: typeProto(cmd.Place.Type), TimeInForce: tifProto(cmd.Place.TimeInForce),
+			QuantityLots: uint64(cmd.Place.Quantity), PriceTicks: uint64(cmd.Place.Price),
+		}
+	case canonical.CommandTypeCancel:
+		pb.CommandType = v1.CommandType_COMMAND_TYPE_CANCEL_ORDER
+		pb.Cancel = &v1.Cancel{OrderId: append([]byte(nil), cmd.Cancel.OrderID[:]...)}
+	default:
+		tb.Fatal("command type")
+	}
+	return pb
+}
+
+func benchOrderID(tb testing.TB, e env, owner []byte, market domain.MarketID, nonce uint64) domain.OrderID {
+	tb.Helper()
+	id, err := canonical.HashOrderID(canonical.OrderIDInput{
+		ChainID: chainID, ExchangeInstanceID: e.instance, Owner: owner, MarketID: market, CommandNonce: nonce,
+	})
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return id
+}
+
+type benchCounts struct {
+	reads  atomic.Uint64
+	writes atomic.Uint64
+}
+
+// Reset zeroes the counters.
+func (c *benchCounts) Reset() {
+	if c == nil {
+		return
+	}
+	c.reads.Store(0)
+	c.writes.Store(0)
+}
+
+// Reads is the number of Get, Has, and iterator entries observed.
+func (c *benchCounts) Reads() uint64 {
+	if c == nil {
+		return 0
+	}
+	return c.reads.Load()
+}
+
+// Writes is the number of Set and Delete calls.
+func (c *benchCounts) Writes() uint64 {
+	if c == nil {
+		return 0
+	}
+	return c.writes.Load()
+}
+
+// Wrap counts operations on the store opened from inner.
+func (c *benchCounts) Wrap(inner corestore.KVStoreService) corestore.KVStoreService {
+	if c == nil || inner == nil {
+		return inner
+	}
+	return benchService{inner: inner, c: c}
+}
+
+type benchService struct {
+	inner corestore.KVStoreService
+	c     *benchCounts
+}
+
+func (s benchService) OpenKVStore(ctx context.Context) corestore.KVStore {
+	return benchKV{inner: s.inner.OpenKVStore(ctx), c: s.c}
+}
+
+type benchKV struct {
+	inner corestore.KVStore
+	c     *benchCounts
+}
+
+func (k benchKV) Get(key []byte) ([]byte, error) {
+	k.c.reads.Add(1)
+	return k.inner.Get(key)
+}
+
+func (k benchKV) Has(key []byte) (bool, error) {
+	k.c.reads.Add(1)
+	return k.inner.Has(key)
+}
+
+func (k benchKV) Set(key, value []byte) error {
+	k.c.writes.Add(1)
+	return k.inner.Set(key, value)
+}
+
+func (k benchKV) Delete(key []byte) error {
+	k.c.writes.Add(1)
+	return k.inner.Delete(key)
+}
+
+func (k benchKV) Iterator(start, end []byte) (corestore.Iterator, error) {
+	it, err := k.inner.Iterator(start, end)
+	if err != nil || it == nil {
+		return it, err
+	}
+	return &benchIter{inner: it, c: k.c}, nil
+}
+
+func (k benchKV) ReverseIterator(start, end []byte) (corestore.Iterator, error) {
+	it, err := k.inner.ReverseIterator(start, end)
+	if err != nil || it == nil {
+		return it, err
+	}
+	return &benchIter{inner: it, c: k.c}, nil
+}
+
+type benchIter struct {
+	inner   corestore.Iterator
+	c       *benchCounts
+	counted bool
+}
+
+func (it *benchIter) note() {
+	if it.counted || !it.inner.Valid() {
+		return
+	}
+	it.counted = true
+	it.c.reads.Add(1)
+}
+
+func (it *benchIter) Domain() (start, end []byte) { return it.inner.Domain() }
+func (it *benchIter) Valid() bool                 { return it.inner.Valid() }
+func (it *benchIter) Next() {
+	it.inner.Next()
+	it.counted = false
+}
+func (it *benchIter) Key() []byte {
+	it.note()
+	return it.inner.Key()
+}
+func (it *benchIter) Value() []byte {
+	it.note()
+	return it.inner.Value()
+}
+func (it *benchIter) Error() error { return it.inner.Error() }
+func (it *benchIter) Close() error { return it.inner.Close() }

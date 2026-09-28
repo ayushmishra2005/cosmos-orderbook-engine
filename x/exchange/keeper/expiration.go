@@ -7,6 +7,7 @@ import (
 	"cosmossdk.io/core/store"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
+	"github.com/ayushmishra2005/cosmos-orderbook-engine/internal/telemetry"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/canonical"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/domain"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/x/exchange/types"
@@ -28,6 +29,7 @@ func (k Keeper) ExpireOrders(ctx context.Context, height uint64, max int) (int, 
 	if err != nil {
 		return 0, err
 	}
+	telemetry.RecordExpired(n)
 	return n, nil
 }
 

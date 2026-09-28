@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/canonical"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/domain"
@@ -53,7 +54,11 @@ type admitResponse struct {
 }
 
 type healthResponse struct {
-	Status string `json:"status"`
+	Status              string `json:"status"`
+	Pending             int    `json:"pending"`
+	Inflight            int    `json:"inflight"`
+	LatestObservedBatch uint64 `json:"latest_observed_batch"`
+	Chain               string `json:"chain"`
 }
 
 type pendingResponse struct {
@@ -65,13 +70,38 @@ type pendingResponse struct {
 func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.Handle("GET /metrics", promhttp.HandlerFor(s.met.reg, promhttp.HandlerOpts{
+		ErrorHandling: promhttp.ContinueOnError,
+	}))
 	mux.HandleFunc("POST /v1/commands", s.handleCommand)
 	mux.HandleFunc("GET /v1/pending", s.handlePending)
 	return mux
 }
 
 func (s *Service) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, healthResponse{Status: "ok"})
+	writeJSON(w, http.StatusOK, s.health())
+}
+
+func (s *Service) health() healthResponse {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	status := "ok"
+	chain := "unknown"
+	if s.chainKnown {
+		if s.chainConnected {
+			chain = "connected"
+		} else {
+			chain = "unavailable"
+			status = "degraded"
+		}
+	}
+	return healthResponse{
+		Status:              status,
+		Pending:             len(s.pending),
+		Inflight:            len(s.inflight),
+		LatestObservedBatch: s.latestBatch,
+		Chain:               chain,
+	}
 }
 
 func (s *Service) handlePending(w http.ResponseWriter, _ *http.Request) {
@@ -82,11 +112,13 @@ func (s *Service) handleCommand(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		s.rejectHTTP(reasonForRead(err))
 		writeAdmit(w, http.StatusBadRequest, Receipt{}, ErrMalformed)
 		return
 	}
 	cmd, err := decodeCommandJSON(body)
 	if err != nil {
+		s.rejectHTTP(reasonLabel(err))
 		writeAdmit(w, statusFor(err), Receipt{}, err)
 		return
 	}
@@ -96,6 +128,19 @@ func (s *Service) handleCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeAdmit(w, http.StatusAccepted, rec, nil)
+}
+
+func (s *Service) rejectHTTP(reason string) {
+	s.met.countReceived("unknown")
+	s.met.countRejected(reason)
+}
+
+func reasonForRead(err error) string {
+	var maxBytes *http.MaxBytesError
+	if errors.As(err, &maxBytes) {
+		return reasonTooLarge
+	}
+	return reasonMalformed
 }
 
 func statusFor(err error) int {

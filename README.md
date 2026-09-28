@@ -48,9 +48,17 @@ The project goal is a serious Cosmos SDK central limit order book: integer ticks
 - A command is finalized only after the chain includes the batch
 - Admission is provisional. It is not execution and it is not chain acceptance
 
+**Implemented — milestone 7, observability and benchmarks**
+
+- Prometheus text on the sequencer `GET /metrics` endpoint
+- Exchange and batch execution counters that cannot change a committed result
+- Matcher, order-book storage, batch-execution, and journal benchmarks
+- CPU and heap profiles through `go test -cpuprofile` and `-memprofile`
+- Bounded retry delay after a failed batch broadcast
+
 **Planned**
 
-- Prometheus metrics and websocket feeds
+- Websocket feeds
 
 `pkg/matching` still does not import the SDK.
 
@@ -78,6 +86,7 @@ cmd/cosmos-orderbookd
 cmd/orderbook-sequencer
 sequencer           admission, journal, batch building, chain submission
 benchmarks          matcher benchmarks
+internal/telemetry  Prometheus recorders
 docs                architecture, matching, state layout
 ```
 
@@ -118,9 +127,11 @@ In another shell, after the node is producing blocks:
 ./build/orderbook-sequencer --home .localnet --from submitter --chain-id orderbook-1
 ```
 
-`--node` defaults to `http://127.0.0.1:26657`. The same values can be set with `ORDERBOOK_NODE`, `ORDERBOOK_CHAIN_ID`, `ORDERBOOK_INSTANCE_ID`, `ORDERBOOK_JOURNAL`, `ORDERBOOK_LISTEN`, `ORDERBOOK_FROM`, `ORDERBOOK_KEYRING_BACKEND`, `ORDERBOOK_HOME`, `ORDERBOOK_MAX_BATCH`, `ORDERBOOK_BATCH_INTERVAL`, `ORDERBOOK_FEES`, and `ORDERBOOK_GAS`.
+`--node` defaults to `http://127.0.0.1:26657`. The same values can be set with `ORDERBOOK_NODE`, `ORDERBOOK_CHAIN_ID`, `ORDERBOOK_INSTANCE_ID`, `ORDERBOOK_JOURNAL`, `ORDERBOOK_LISTEN`, `ORDERBOOK_FROM`, `ORDERBOOK_KEYRING_BACKEND`, `ORDERBOOK_HOME`, `ORDERBOOK_MAX_BATCH`, `ORDERBOOK_BATCH_INTERVAL`, `ORDERBOOK_RETRY_INITIAL`, `ORDERBOOK_RETRY_MAX`, `ORDERBOOK_FEES`, and `ORDERBOOK_GAS`.
 
-`POST /v1/commands` takes one JSON command. `chain_id`, `exchange_instance_id`, and `owner` are text. `pub_key`, `signature`, and `cancel.order_id` are hex. The signature is over the canonical batch-command bytes, not over this JSON. `GET /health` reports process liveness. `GET /v1/pending` lists commands that are not yet finalized.
+`POST /v1/commands` takes one JSON command. `chain_id`, `exchange_instance_id`, and `owner` are text. `pub_key`, `signature`, and `cancel.order_id` are hex. The signature is over the canonical batch-command bytes, not over this JSON. `GET /health` reports pending and in-flight counts, the latest observed batch, and chain connectivity. `GET /metrics` is Prometheus text. `GET /v1/pending` lists commands that are not yet finalized.
+
+A failed broadcast waits `--retry-initial` (default 1s) before the next attempt. The wait doubles up to `--retry-max` (default 30s) and resets after a batch is included. The wait does not reorder commands. A command whose nonce the chain has already passed is dropped. Other commands, including an order rejected for insufficient balance, stay pending.
 
 ## Tests
 
@@ -135,10 +146,37 @@ go vet ./...
 ## Benchmarks
 
 ```bash
-go test -bench=. -benchmem -count=1 -run=^$ ./benchmarks/
+make bench-matching   # pure matcher
+make bench-storage    # Cosmos-backed order book
+make bench-batch      # keeper execution of 100, 1,000, and 10,000 commands
+make bench-journal    # append, including fsync, and replay
+make bench
 ```
 
-Or `make bench`. The harness prints `ns/op`, `allocs/op`, and `bytes/op`. This repository does not publish an orders-per-second number. Treat benchmark output as a measurement of the machine that ran it.
+`make bench-count` repeats each benchmark six times. That output is input for `benchstat`. CPU and heap profiles:
+
+```bash
+make profile-cpu
+make profile-heap
+go tool pprof -top cpu.out
+go tool pprof -top mem.out
+```
+
+The harness prints `ns/op`, `B/op`, and `allocs/op`. Matcher benchmarks also print `makers/op` and `fills/op`. Storage and batch benchmarks also print `kv_reads/op` and `kv_writes/op`. A batch larger than 128 commands is several atomic `FinalizeBatch` calls. None of these numbers are committed block throughput. Profile files (`cpu.out`, `mem.out`) are not source.
+
+One measurement on this machine, Go 1.27.1, darwin/arm64, Apple M5 Max:
+
+| workload | result |
+| --- | --- |
+| matcher, one fill | 70.67 ns/op, 104 B/op, 2 allocs/op |
+| matcher, 1,000 same-price makers | 52.0 µs/op, 198,256 B/op, 1,011 allocs/op |
+| matcher, 10,000 same-price makers | 652 µs/op, 3,813,942 B/op, 10,019 allocs/op |
+| matcher, best price does not cross | 56.52 ns/op |
+| Cosmos book lookup | 330 ns/op, 1 KV read |
+| Cosmos book, match 100 makers | 987 µs/op, 313 KV reads, 407 KV writes |
+| batch keeper, 10,000 resting places, one sample | 1.06 s, 120,159 KV reads, 80,000 KV writes |
+| journal append, one record, with fsync | 3.44 ms/op |
+| journal frame encode, no fsync | 111 ns/op |
 
 ## License
 

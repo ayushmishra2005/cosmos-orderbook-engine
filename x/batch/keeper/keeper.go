@@ -3,11 +3,13 @@ package keeper
 import (
 	"bytes"
 	"context"
+	"time"
 
 	"cosmossdk.io/core/store"
 	"github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
+	"github.com/ayushmishra2005/cosmos-orderbook-engine/internal/telemetry"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/arithmetic"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/canonical"
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/domain"
@@ -55,6 +57,7 @@ func NewKeeper(svc store.KVStoreService, chainID string, ex Exchange) (Keeper, e
 // The results hash, commitment, and head are written only after every command succeeds.
 // A failure discards the cache.
 func (k Keeper) FinalizeBatch(ctx context.Context, msg *v1.MsgFinalizeBatch) (types.Batch, error) {
+	start := time.Now()
 	var out types.Batch
 	err := k.commit(ctx, func(ctx sdk.Context) error {
 		batch, err := k.finalize(ctx, msg)
@@ -67,6 +70,7 @@ func (k Keeper) FinalizeBatch(ctx context.Context, msg *v1.MsgFinalizeBatch) (ty
 	if err != nil {
 		return types.Batch{}, err
 	}
+	telemetry.RecordBatch(len(out.Results), time.Since(start))
 	return out, nil
 }
 

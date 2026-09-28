@@ -102,6 +102,10 @@ The batch loop reads the current batch head and exchange revision, freezes the o
 
 The journal is not chain state. It is not an exchange state root.
 
+Admission metrics, batch timings, and the retry delay are local to the sequencer process. A failed batch is not broadcast again until that delay elapses. The delay doubles up to a cap and resets after a batch is included. It does not change command order. A rejected command stays pending unless its nonce is already behind the chain. An underfunded order is not dropped; a later deposit can make it valid.
+
+`GET /health` reports pending and in-flight counts, the latest observed batch number, and whether the last chain call succeeded. `GET /metrics` serves Prometheus text. Neither response is an input to matching, fees, ordering, batch hashes, or state writes. A metrics recorder that panics is ignored. Wall-clock samples used for histograms are not written to the store.
+
 ## Application
 
 `cosmos-orderbookd` is a single-validator CometBFT chain. Deposits move bank coins from the user to the exchange module account and credit available balance. Withdrawals do the reverse and cannot spend locked balance. Both run in one cache, so a bank failure does not leave the internal ledger changed. Trades move atoms only inside the exchange ledger. The module account's bank balance for each registered denom must cover the sum of available and locked balances.

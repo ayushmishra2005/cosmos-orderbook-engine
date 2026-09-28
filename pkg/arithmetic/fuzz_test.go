@@ -5,6 +5,8 @@ import (
 	"math"
 	"math/big"
 	"testing"
+
+	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/domain"
 )
 
 func FuzzAdd(f *testing.F) {
@@ -87,6 +89,62 @@ func FuzzCeilDiv(f *testing.F) {
 		}
 		if err != nil || got != q.Uint64() {
 			t.Fatalf("CeilDiv(%d, %d) = %d, %v; want %s", n, d, got, err, q.String())
+		}
+	})
+}
+
+func FuzzBaseAmount(f *testing.F) {
+	f.Add(uint64(10), uint64(1))
+	f.Add(uint64(1), uint64(0))
+	f.Fuzz(func(t *testing.T, qty, lot uint64) {
+		got, err := BaseAmount(domain.Quantity(qty), lot)
+		if lot == 0 {
+			if !errors.Is(err, ErrInvalidLotSize) {
+				t.Fatalf("lot 0: %v", err)
+			}
+			return
+		}
+		var q, l, p big.Int
+		q.SetUint64(qty)
+		l.SetUint64(lot)
+		p.Mul(&q, &l)
+		if !p.IsUint64() {
+			if !errors.Is(err, ErrOverflow) {
+				t.Fatalf("BaseAmount(%d, %d) = %d, %v", qty, lot, got, err)
+			}
+			return
+		}
+		if err != nil || got != p.Uint64() {
+			t.Fatalf("BaseAmount(%d, %d) = %d, %v; want %s", qty, lot, got, err, p.String())
+		}
+	})
+}
+
+func FuzzNotional(f *testing.F) {
+	f.Add(uint64(2), uint64(3), uint64(4))
+	f.Add(uint64(1), uint64(1), uint64(0))
+	f.Fuzz(func(t *testing.T, qty, price, atoms uint64) {
+		got, err := Notional(domain.Quantity(qty), domain.Price(price), atoms)
+		if atoms == 0 {
+			if !errors.Is(err, ErrInvalidTickValue) {
+				t.Fatalf("atoms 0: %v", err)
+			}
+			return
+		}
+		var q, p, a, prod big.Int
+		q.SetUint64(qty)
+		p.SetUint64(price)
+		a.SetUint64(atoms)
+		prod.Mul(&q, &p)
+		prod.Mul(&prod, &a)
+		if !prod.IsUint64() {
+			if !errors.Is(err, ErrOverflow) {
+				t.Fatalf("Notional(%d, %d, %d) = %d, %v", qty, price, atoms, got, err)
+			}
+			return
+		}
+		if err != nil || got != prod.Uint64() {
+			t.Fatalf("Notional(%d, %d, %d) = %d, %v; want %s", qty, price, atoms, got, err, prod.String())
 		}
 	})
 }

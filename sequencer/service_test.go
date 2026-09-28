@@ -6,11 +6,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
@@ -465,4 +468,275 @@ func sideName(s domain.Side) string {
 		return "sell"
 	}
 	return "buy"
+}
+
+func TestRetryBackoffSchedule(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.RetryInitial = 10 * time.Millisecond
+	cfg.RetryMax = 40 * time.Millisecond
+	svc := openTest(t, cfg, nil)
+	if d := svc.failureDelay(); d != 10*time.Millisecond {
+		t.Fatalf("first %s", d)
+	}
+	if d := svc.failureDelay(); d != 20*time.Millisecond {
+		t.Fatalf("second %s", d)
+	}
+	if d := svc.failureDelay(); d != 40*time.Millisecond {
+		t.Fatalf("third %s", d)
+	}
+	if d := svc.failureDelay(); d != 40*time.Millisecond {
+		t.Fatalf("capped %s", d)
+	}
+	svc.resetBackoff()
+	if d := svc.failureDelay(); d != 10*time.Millisecond {
+		t.Fatalf("reset %s", d)
+	}
+}
+
+func TestRunBacksOffAfterRejection(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.BatchInterval = 5 * time.Millisecond
+	cfg.RetryInitial = time.Second
+	cfg.RetryMax = time.Second
+	chain := &memChain{submitErr: errors.New("insufficient funds")}
+	svc := openTest(t, cfg, chain)
+	if _, err := svc.Admit(context.Background(), signPlace(t, newKey(), cfg, 1, domain.SideBuy)); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	err := svc.Run(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("run %v", err)
+	}
+	chain.mu.Lock()
+	n := len(chain.submitted)
+	chain.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("broadcasts %d", n)
+	}
+	pending := svc.Pending()
+	if len(pending) != 1 || pending[0].Status != StatusPending {
+		t.Fatalf("pending %+v", pending)
+	}
+}
+
+func TestUnderfundedCommandStaysPending(t *testing.T) {
+	cfg := testConfig(t)
+	chain := &memChain{submitErr: errors.New("insufficient funds")}
+	svc := openTest(t, cfg, chain)
+	cmd := signPlace(t, newKey(), cfg, 1, domain.SideSell)
+	if _, err := svc.Admit(context.Background(), cmd); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.SubmitOnce(context.Background()); !errors.Is(err, ErrBatchRejected) {
+		t.Fatal(err)
+	}
+	pending := svc.Pending()
+	if len(pending) != 1 || pending[0].Position != 1 || pending[0].CommandNonce != 1 {
+		t.Fatalf("pending %+v", pending)
+	}
+}
+
+func TestHealthAndMetrics(t *testing.T) {
+	cfg := testConfig(t)
+	svc := openTest(t, cfg, nil)
+	ts := httptest.NewServer(svc.Handler())
+	defer ts.Close()
+
+	res, err := http.Get(ts.URL + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(res.Body)
+	res.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.StatusCode != http.StatusOK || !strings.Contains(string(body), `"chain":"unknown"`) || !strings.Contains(string(body), `"pending":0`) {
+		t.Fatalf("health %d %s", res.StatusCode, body)
+	}
+
+	bad, err := http.Post(ts.URL+"/v1/commands", "application/json", strings.NewReader("{"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad.Body.Close()
+
+	cmd := signPlace(t, newKey(), cfg, 1, domain.SideBuy)
+	ok, err := http.Post(ts.URL+"/v1/commands", "application/json", strings.NewReader(string(commandJSON(t, cmd))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok.Body.Close()
+	if ok.StatusCode != http.StatusAccepted {
+		t.Fatalf("admit %d", ok.StatusCode)
+	}
+
+	metricsRes, err := http.Get(ts.URL + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, err := io.ReadAll(metricsRes.Body)
+	metricsRes.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(text)
+	for _, needle := range []string{
+		"sequencer_commands_received_total",
+		"sequencer_commands_accepted_total",
+		"sequencer_commands_rejected_total",
+		`sequencer_commands_rejected_total{reason="malformed"}`,
+		`sequencer_commands_accepted_total{command_type="place"}`,
+		"sequencer_pending_commands 1",
+		"sequencer_next_position 2",
+		"sequencer_inflight_commands",
+		"sequencer_last_finalized_batch",
+	} {
+		if !strings.Contains(got, needle) {
+			t.Fatalf("missing %s\n%s", needle, got)
+		}
+	}
+
+	health, err := http.Get(ts.URL + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err = io.ReadAll(health.Body)
+	health.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"pending":1`) || !strings.Contains(string(body), `"chain":"connected"`) {
+		t.Fatalf("health after admit %s", body)
+	}
+	if strings.Contains(string(body), sdk.AccAddress(cmd.Owner).String()) {
+		t.Fatal("health exposed an owner")
+	}
+}
+
+func TestAdmitLoad(t *testing.T) {
+	for _, n := range []int{100, 1000} {
+		t.Run(strconvItoa(n), func(t *testing.T) {
+			cfg := testConfig(t)
+			svc := openTest(t, cfg, nil)
+			cmds := make([]canonical.Command, n)
+			for i := 0; i < n; i++ {
+				cmds[i] = signPlace(t, newKey(), cfg, 1, domain.SideBuy)
+			}
+			type result struct {
+				pos   uint64
+				owner string
+				err   error
+			}
+			out := make([]result, n)
+			var wg sync.WaitGroup
+			for i := 0; i < n; i++ {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					rec, err := svc.Admit(context.Background(), cmds[i])
+					out[i] = result{pos: rec.Position, owner: rec.Owner, err: err}
+				}(i)
+			}
+			wg.Wait()
+			seen := map[uint64]int{}
+			for i, res := range out {
+				if res.err != nil {
+					t.Fatalf("admit %d: %v", i, res.err)
+				}
+				if res.pos == 0 || seen[res.pos] != 0 {
+					t.Fatalf("position %d", res.pos)
+				}
+				seen[res.pos] = i + 1
+			}
+			for pos := uint64(1); pos <= uint64(n); pos++ {
+				if seen[pos] == 0 {
+					t.Fatalf("missing %d", pos)
+				}
+			}
+			if svc.NextPosition() != uint64(n+1) {
+				t.Fatalf("next %d", svc.NextPosition())
+			}
+			if _, err := svc.Admit(context.Background(), cmds[0]); !errors.Is(err, ErrDuplicate) {
+				t.Fatalf("duplicate: %v", err)
+			}
+			if err := svc.Close(); err != nil {
+				t.Fatal(err)
+			}
+			svc, err := Open(cfg, &memChain{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer svc.Close()
+			pending := svc.Pending()
+			if len(pending) != n {
+				t.Fatalf("replay %d", len(pending))
+			}
+			for i, rec := range pending {
+				want := uint64(i + 1)
+				if rec.Position != want {
+					t.Fatalf("journal[%d] position %d", i, rec.Position)
+				}
+				idx := seen[want] - 1
+				if rec.Owner != out[idx].owner {
+					t.Fatalf("journal owner %s", rec.Owner)
+				}
+			}
+		})
+	}
+}
+
+func TestAdmitLoadDuplicate(t *testing.T) {
+	cfg := testConfig(t)
+	svc := openTest(t, cfg, nil)
+	cmd := signPlace(t, newKey(), cfg, 1, domain.SideSell)
+	const n = 32
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	positions := make([]uint64, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			rec, err := svc.Admit(context.Background(), cmd)
+			positions[i] = rec.Position
+			errs[i] = err
+		}(i)
+	}
+	wg.Wait()
+	accepted := 0
+	for i := range errs {
+		if errs[i] == nil {
+			accepted++
+			if positions[i] != 1 {
+				t.Fatalf("position %d", positions[i])
+			}
+			continue
+		}
+		if !errors.Is(errs[i], ErrDuplicate) {
+			t.Fatalf("err %v", errs[i])
+		}
+	}
+	if accepted != 1 {
+		t.Fatalf("accepted %d", accepted)
+	}
+	if len(svc.Pending()) != 1 || svc.NextPosition() != 2 {
+		t.Fatalf("pending %d next %d", len(svc.Pending()), svc.NextPosition())
+	}
+}
+
+func strconvItoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var buf [16]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(buf[i:])
 }

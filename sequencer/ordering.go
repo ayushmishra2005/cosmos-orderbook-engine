@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"time"
 
 	"github.com/ayushmishra2005/cosmos-orderbook-engine/pkg/canonical"
 )
@@ -12,10 +13,19 @@ import (
 // Admit validates cmd, assigns the next sequencer position, and journals it
 // before reporting success. The position is the batch order.
 func (s *Service) Admit(ctx context.Context, cmd canonical.Command) (Receipt, error) {
+	start := time.Now()
+	kind := commandTypeLabel(cmd)
+	s.met.countReceived(kind)
+	rec, err := s.admit(ctx, cmd)
+	s.met.observeAdmission(start, kind, err)
+	return rec, err
+}
+
+func (s *Service) admit(ctx context.Context, cmd canonical.Command) (Receipt, error) {
 	if err := validate(s.cfg, cmd); err != nil {
 		return Receipt{}, err
 	}
-	chainNext, err := s.chain.NextNonce(ctx, cmd.Owner)
+	chainNext, err := s.queryNonce(ctx, cmd.Owner)
 	if err != nil {
 		if errors.Is(err, ErrChainUnavailable) {
 			return Receipt{}, err
@@ -51,14 +61,16 @@ func (s *Service) Admit(ctx context.Context, cmd canonical.Command) (Receipt, er
 	if err != nil {
 		return Receipt{}, err
 	}
-	if err := s.journal.append(record{Position: pos, Status: statusPending, Command: encoded}); err != nil {
+	if err := s.appendJournal([]record{{Position: pos, Status: statusPending, Command: encoded}}); err != nil {
 		s.rewind(pos)
+		s.syncGauges()
 		return Receipt{}, err
 	}
 	it := &item{position: pos, cmd: cmd, encoded: encoded, id: id}
 	s.seen[id] = struct{}{}
 	s.pending = append(s.pending, it)
 	s.byPos[pos] = StatusPending
+	s.syncGauges()
 	return receiptFor(it, StatusPending), nil
 }
 

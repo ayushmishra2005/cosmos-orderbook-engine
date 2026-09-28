@@ -6,5 +6,6 @@ dist/
 *.exe
 *.test
 *.out
+*.prof
 coverage.out
 vendor/

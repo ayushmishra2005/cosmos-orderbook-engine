@@ -25,6 +25,8 @@ type Config struct {
 	MaxCommandBytes int
 	MaxBatch        int
 	BatchInterval   time.Duration
+	RetryInitial    time.Duration
+	RetryMax        time.Duration
 	Logger          *slog.Logger
 }
 
@@ -37,6 +39,12 @@ func (c Config) normalized() (Config, error) {
 	}
 	if c.BatchInterval == 0 {
 		c.BatchInterval = 2 * time.Second
+	}
+	if c.RetryInitial == 0 {
+		c.RetryInitial = time.Second
+	}
+	if c.RetryMax == 0 {
+		c.RetryMax = 30 * time.Second
 	}
 	if c.ChainID == "" {
 		return Config{}, fmt.Errorf("sequencer: chain id is required")
@@ -58,6 +66,12 @@ func (c Config) normalized() (Config, error) {
 	}
 	if c.BatchInterval < 0 {
 		return Config{}, fmt.Errorf("sequencer: batch interval must be positive")
+	}
+	if c.RetryInitial < 0 || c.RetryMax < 0 {
+		return Config{}, fmt.Errorf("sequencer: retry delay must be positive")
+	}
+	if c.RetryMax < c.RetryInitial {
+		c.RetryMax = c.RetryInitial
 	}
 	c.InstanceID = append([]byte(nil), c.InstanceID...)
 	return c, nil
@@ -88,14 +102,19 @@ type Service struct {
 	journal *Journal
 	log     *slog.Logger
 
-	mu        sync.Mutex
-	submitMu  sync.Mutex
-	next      uint64
-	exhausted bool
-	pending   []*item
-	inflight  []*item
-	seen      map[[32]byte]struct{}
-	byPos     map[uint64]Status
+	mu             sync.Mutex
+	submitMu       sync.Mutex
+	next           uint64
+	exhausted      bool
+	pending        []*item
+	inflight       []*item
+	seen           map[[32]byte]struct{}
+	byPos          map[uint64]Status
+	backoff        time.Duration
+	chainKnown     bool
+	chainConnected bool
+	latestBatch    uint64
+	met            *metrics
 }
 
 // Open replays the journal and restores the next sequence number.
@@ -125,6 +144,7 @@ func Open(cfg Config, chain Chain) (*Service, error) {
 		exhausted: snap.exhausted,
 		seen:      make(map[[32]byte]struct{}, len(snap.items)),
 		byPos:     make(map[uint64]Status, len(snap.items)),
+		met:       newMetrics(),
 	}
 	var fix []record
 	for _, it := range snap.items {
@@ -161,6 +181,7 @@ func Open(cfg Config, chain Chain) (*Service, error) {
 	if s.next == 0 && !s.exhausted {
 		s.next = 1
 	}
+	s.syncGauges()
 	return s, nil
 }
 
@@ -223,25 +244,37 @@ func receiptFor(it *item, st Status) Receipt {
 }
 
 // Run submits one batch per interval until ctx is cancelled.
+// After a transport or rejection error it waits with exponential backoff.
+// The wait does not change command order.
 func (s *Service) Run(ctx context.Context) error {
-	ticker := time.NewTicker(s.cfg.BatchInterval)
-	defer ticker.Stop()
+	timer := time.NewTimer(s.cfg.BatchInterval)
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
-			err := s.SubmitOnce(ctx)
-			if err == nil || errors.Is(err, ErrEmptyBatch) {
-				continue
-			}
-			s.log.Error("batch submission", "err", err)
+		case <-timer.C:
 		}
+		err := s.SubmitOnce(ctx)
+		wait := s.cfg.BatchInterval
+		if err != nil && !errors.Is(err, ErrEmptyBatch) {
+			s.log.Error("batch submission", "err", err)
+			wait = s.failureDelay()
+		}
+		timer.Reset(wait)
 	}
 }
 
 // SubmitOnce builds and submits the oldest pending commands.
 func (s *Service) SubmitOnce(ctx context.Context) error {
+	err := s.submitOnce(ctx)
+	if err != nil && !errors.Is(err, ErrEmptyBatch) {
+		s.met.countBatchFailed()
+	}
+	return err
+}
+
+func (s *Service) submitOnce(ctx context.Context) error {
 	if !s.submitMu.TryLock() {
 		return nil
 	}
@@ -270,22 +303,24 @@ func (s *Service) SubmitOnce(ctx context.Context) error {
 		recs[i] = record{Position: it.position, Status: statusInFlight, Command: it.encoded}
 		s.byPos[it.position] = StatusInFlight
 	}
-	if err := s.journal.appendMany(recs); err != nil {
+	if err := s.appendJournal(recs); err != nil {
 		s.pending = append(batch, s.pending...)
 		s.inflight = nil
 		for _, it := range batch {
 			s.byPos[it.position] = StatusPending
 		}
+		s.syncGauges()
 		s.mu.Unlock()
 		return err
 	}
+	s.syncGauges()
 	cmds := make([]canonical.Command, len(batch))
 	for i, it := range batch {
 		cmds[i] = cloneCommand(it.cmd)
 	}
 	s.mu.Unlock()
 
-	head, err := s.chain.Head(ctx)
+	head, err := s.queryHead(ctx)
 	if err != nil {
 		if rerr := s.restore(batch); rerr != nil {
 			return rerr
@@ -299,13 +334,19 @@ func (s *Service) SubmitOnce(ctx context.Context) error {
 		}
 		return err
 	}
-	if err := s.chain.Submit(ctx, msg); err != nil {
+	submitStart := time.Now()
+	err = s.chain.Submit(ctx, msg)
+	s.met.observeSubmit(submitStart, len(batch))
+	if err != nil {
 		return s.recover(ctx, batch, err)
 	}
 	if err := s.mark(batch, StatusFinalized, false); err != nil {
 		s.log.Error("chain accepted the batch but the journal update failed", "err", err, "batch", msg.BatchNumber)
 		return err
 	}
+	s.met.countFinalized(len(batch), msg.BatchNumber)
+	s.noteFinalized(msg.BatchNumber)
+	s.resetBackoff()
 	s.log.Info("batch finalized", "batch", msg.BatchNumber, "commands", len(batch), "first", batch[0].position, "last", batch[len(batch)-1].position)
 	return nil
 }
@@ -315,13 +356,16 @@ func (s *Service) restore(batch []*item) error {
 }
 
 func (s *Service) recover(ctx context.Context, batch []*item, cause error) error {
+	// Drop a command only when its nonce is already behind the chain.
+	// An underfunded order stays pending. A later deposit can make it valid.
+	// The caller waits out the retry delay before broadcasting again.
 	type decision struct {
 		it   *item
 		drop bool
 	}
 	decisions := make([]decision, len(batch))
 	for i, it := range batch {
-		next, err := s.chain.NextNonce(ctx, it.cmd.Owner)
+		next, err := s.queryNonce(ctx, it.cmd.Owner)
 		if err != nil {
 			if rerr := s.restore(batch); rerr != nil {
 				return rerr
@@ -343,7 +387,7 @@ func (s *Service) recover(ctx context.Context, batch []*item, cause error) error
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.journal.appendMany(recs); err != nil {
+	if err := s.appendJournal(recs); err != nil {
 		return err
 	}
 	for _, d := range decisions {
@@ -355,6 +399,7 @@ func (s *Service) recover(ctx context.Context, batch []*item, cause error) error
 	}
 	s.inflight = nil
 	s.pending = append(keep, s.pending...)
+	s.syncGauges()
 	return fmt.Errorf("%w: %v", ErrBatchRejected, cause)
 }
 
@@ -369,7 +414,7 @@ func (s *Service) mark(batch []*item, status Status, prepend bool) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.journal.appendMany(recs); err != nil {
+	if err := s.appendJournal(recs); err != nil {
 		return err
 	}
 	for _, it := range batch {
@@ -379,6 +424,7 @@ func (s *Service) mark(batch []*item, status Status, prepend bool) error {
 	if prepend {
 		s.pending = append(append([]*item(nil), batch...), s.pending...)
 	}
+	s.syncGauges()
 	return nil
 }
 
@@ -394,6 +440,79 @@ func (s *Service) takePosition() (uint64, error) {
 	}
 	s.next++
 	return pos, nil
+}
+
+func (s *Service) appendJournal(recs []record) error {
+	start := time.Now()
+	err := s.journal.appendMany(recs)
+	s.met.observeJournal(start)
+	return err
+}
+
+func (s *Service) queryHead(ctx context.Context) (Head, error) {
+	start := time.Now()
+	head, err := s.chain.Head(ctx)
+	s.met.observeChain(start)
+	s.noteChain(err == nil, head.Latest, err == nil)
+	return head, err
+}
+
+func (s *Service) queryNonce(ctx context.Context, owner []byte) (uint64, error) {
+	start := time.Now()
+	next, err := s.chain.NextNonce(ctx, owner)
+	s.met.observeChain(start)
+	s.noteChain(err == nil, 0, false)
+	return next, err
+}
+
+func (s *Service) noteChain(ok bool, latest uint64, haveLatest bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.chainKnown = true
+	s.chainConnected = ok
+	s.met.setChainUp(ok)
+	if ok && haveLatest {
+		s.latestBatch = latest
+		s.met.setLastBatch(latest)
+	}
+}
+
+func (s *Service) noteFinalized(batch uint64) {
+	s.mu.Lock()
+	s.latestBatch = batch
+	s.mu.Unlock()
+}
+
+// syncGauges reads sequencer queues. The caller holds s.mu, or Open has not returned.
+func (s *Service) syncGauges() {
+	next := s.next
+	if s.exhausted {
+		next = 0
+	}
+	s.met.setGauges(len(s.pending), len(s.inflight), next)
+}
+
+func (s *Service) failureDelay() time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d := s.backoff
+	if d == 0 {
+		d = s.cfg.RetryInitial
+	}
+	next := d * 2
+	if next <= 0 || next > s.cfg.RetryMax {
+		next = s.cfg.RetryMax
+	}
+	s.backoff = next
+	s.met.setBackoff(d)
+	return d
+}
+
+func (s *Service) resetBackoff() {
+	s.mu.Lock()
+	s.backoff = 0
+	s.met.setBackoff(0)
+	s.mu.Unlock()
 }
 
 func (s *Service) rewind(pos uint64) {
